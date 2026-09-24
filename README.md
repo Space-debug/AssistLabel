@@ -246,38 +246,7 @@ assistlabel help models download  # 多级子命令
 
 ---
 
-## 4. 性能调优（run.yaml `depth:` 段）
-
-深度阶段是三级流水线：**预取解码线程 → GPU 批量推理 → 写盘线程池**，
-三段与下一批次重叠执行。调优顺序：
-
-| 参数 | 默认 | 建议 |
-|---|---|---|
-| `batch_size` | 4 | 显存允尽量调大（8~16）；OOM 则减半。对吞吐影响最大 |
-| `half` | true | fp16 推理，保持开启 |
-| `prefetch` | 4 | 磁盘慢（机械盘/网络盘）时调大，解码彻底不挡 GPU |
-| `write_workers` | 2 | NVMe 可 2-4；写入大 16-bit PNG 的收益明显 |
-| `viz: false` | true | 不需要深度伪彩抽检时关掉 |
-
-其他已在引擎内启用的优化：cuDNN benchmark（固定输入尺寸自动选最快卷积核）、
-TF32（Ampere+ 显卡免费加速）、横竖图分桶批处理（避免 padding 浪费）、
-批量推理失败自动降级为逐图（防 OOM 连坐）。
-
-SAM3 检测阶段为逐图多提示模型（图像编码一次复用全部类别提示），
-耗时主要由模型决定；`detect.conf_thres` 调高可减少无效目标的写盘量。
-
----
-
-## 5. 可靠性机制
-
-- **断点续跑**：`manifest.jsonl` 每批次原子落盘（tmp+rename），中断只损失最近几秒进度；
-- **坏图隔离**：单张解码失败/推理 OOM 只标记该图 failed，不阻塞批次；resume 会自动重试 failed 图；
-- **撕裂写检测**：`verify` 重读每个 "done" 产物的 PNG 头/uint16 类型/有效像素/JSON 完整性；
-- **manifest 防爆**：全量重写按时间节流（5s），百万图规模也不会因存进度拖慢作业。
-
----
-
-## 6. 架构
+## 4. 架构
 
 ```
 assistlabel/
@@ -310,7 +279,7 @@ assistlabel/
 
 ---
 
-## 7. 开发与测试（无需 GPU）
+## 5. 开发与测试（无需 GPU）
 
 ```bash
 python -m venv .venv && .venv\Scripts\activate
@@ -325,7 +294,7 @@ ultralytics 导出）、ontology 解析与错误、深度量化 roundtrip、mani
 
 ---
 
-## 8. 许可说明
+## 6. 许可说明
 
 - 本工具代码：MIT
 - SAM3 权重：Meta 自定义 SAM License（商用前请核对 LICENSE）
