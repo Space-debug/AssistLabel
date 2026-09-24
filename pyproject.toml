@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "assistlabel"
-version = "0.1.0"
+version = "1.0.0"
 description = "Batch auto-labeling pipeline: Depth Anything depth ground truth + SAM3 detection/segmentation"
 readme = "README.md"
 requires-python = ">=3.10"
