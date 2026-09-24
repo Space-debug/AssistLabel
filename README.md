@@ -83,12 +83,7 @@ assistlabel validate -c mydata/run.yaml --sample 50   # QA 报告 + 低置信度
 assistlabel export -c mydata/run.yaml --format yolo --split 0.8  # ultralytics 布局
 ```
 
-标注结果一览（`mydata/labeled/`）：`detect/annotations.json`（COCO 实例分割+检测）、
-`semantic/`（语义 PNG）、`depth/`（16-bit 深度）、三个 `*_viz/` 可视化目录。
 
-室内/室外深度模型切换：`run.yaml` 中 `depth.model` 改为
-`da3-metric-L`（默认，米制室内外通用）或 `da2-metric-indoor-L` / `da2-metric-outdoor-L`。
-全部注册模型见 `assistlabel models list`（带中文说明）。
 
 ### 2.2 配置文件说明（run.yaml）
 
