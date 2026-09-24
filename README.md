@@ -208,57 +208,124 @@ out_dir/
 （按需导出：`assistlabel export --format yolo` 生成 ultralytics 训练布局）
 ```
 
-标注即 COCO：`detect/annotations.json` 的每个 annotation 携带 RLE 实例掩码、
-bbox、score，以及融合的每目标深度统计（`depth_median_m` 等），是伪激光雷达/
-3D 框数据集的输入。
+标注即标准 COCO：`detect/annotations.json` 的每条 annotation 携带 RLE
+实例掩码（像素级）、bbox 与 score，符合标准 COCO 字段规范，ultralytics
+官方 `convert_coco` 工具或 pycocotools 均可直接读取。
 
 ---
 
-## 5. CLI 参考
+## 5. CLI 命令手册
 
-| 命令 | 说明 |
+> **所有命令与子命令都支持查询用法**：`assistlabel --help`、
+> `assistlabel run --help`、`assistlabel models download --help`……
+> 也可以用 `assistlabel help <命令>`（支持多级，如 `assistlabel help models download`）。
+
+### 5.1 init — 生成项目配置
+
+```
+assistlabel init [--dir DIR] [--engine auto|mock]
+```
+
+| 选项 | 说明 |
 |---|---|
-| `assistlabel init [--dir DIR] [--engine auto\|mock]` | 生成 run.yaml + ontology.yaml |
-| `assistlabel run -c run.yaml [--tasks depth,detect] [--no-resume]` | 批量流水线（可中断续跑） |
-| `assistlabel fuse -c run.yaml` | 对已有 depth + labels 单独跑融合 |
-| `assistlabel export -c run.yaml --format coco\|yolo\|semantic [--split 0.8] [--viz]` | 导出 COCO / YOLO(ultralytics) / 语义分割 |
-| `assistlabel validate -c run.yaml [--sample 50]` | QA 报告 + 分层复核清单 |
-| `assistlabel verify -c run.yaml [--repair]` | 产物完整性校验（断电/撕裂写检测与修复） |
-| `assistlabel status -c run.yaml` | 各任务进度：done/failed/pending/ETA |
-| `assistlabel run ... --redo-detect` | ontology 变更后清除 detect 状态重刷 |
-| `assistlabel models list\|info KEY\|download KEY\|check` | 注册表 / 预下载 / 环境预检 |
+| `--dir DIR` | 项目目录（默认当前目录），自动创建 `run.yaml`、`ontology.yaml`、`data/raw/` |
+| `--engine auto\|mock` | auto=注册表里的真实模型；mock=测试假引擎（无需 GPU，秒级验证流程） |
 
-#### 三种导出格式怎么选
+### 5.2 run — 批量标注流水线
 
-| 格式 | 内容 | 适用 |
-|---|---|---|
-| `coco` | 实例级：每目标框 + polygon/RLE 掩码，**实例重叠完整保留** | 实例分割/检测训练（推荐默认） |
-| `yolo` | ultralytics 训练布局：`images/ labels/ train/val + data.yaml` | YOLO 系检测训练 |
-| `semantic` | 每图一张单通道 PNG，像素值=类别索引（0=背景，1..N=ontology 顺序）+ `classes.txt`；`--viz` 附彩色预览 | 语义分割训练（Cityscapes/ADE20K 风格） |
+```
+assistlabel run -c run.yaml [选项]
+```
 
-两点注意：
+| 选项 | 说明 |
+|---|---|
+| `-c/--config PATH` | run.yaml 路径（默认 `run.yaml`） |
+| `--tasks depth,detect` | 覆盖配置里的任务列表（逗号分隔） |
+| `--resume/--no-resume` | 断点续跑开关（默认开；跳过 manifest 中已完成的图） |
+| `--limit N` | 只处理前 N 张（小批量试跑） |
+| `--redo-detect` | 清除全部 detect 状态后重跑（ontology 变更后使用） |
+| `--force` | 跳过磁盘剩余空间预检 |
 
-- **语义导出的重叠处理**：实例掩码重叠时按绘制顺序覆盖（后画盖先画）——这是从实例
-  合成语图的通用做法。若下游需要严格保留重叠区域，用 `coco`（实例级无损）。
-- **掩码边界精度**：`mask_to: polygon`（默认）落盘简化多边形（与原始掩码 IoU
-  平均 ~0.99、最差 ~0.90）；`mask_to: rle` 落盘像素级精确掩码（无需
-  pycocotools，纯标准库编解码），`semantic`/`coco --segmentation rle` 即按
-  像素级真值导出。代价：rle 形状在 X-AnyLabeling 里不可视化编辑。
+执行中可随时 Ctrl+C 中断：进度已保存，重跑自动续。
 
-关键配置项（run.yaml）：
+### 5.3 status — 查看进度（只读，不执行处理）
+
+```
+assistlabel status -c run.yaml [--tasks depth,detect]
+```
+
+按任务显示 done / failed / pending 与平均耗时、ETA；若 ontology.yaml
+在标注后发生过变更，会提示用 `--redo-detect` 重刷。
+
+### 5.4 export — 导出训练格式
+
+```
+assistlabel export -c run.yaml --format yolo [--split 0.75]
+```
+
+detect 任务原生产出就是 COCO（`detect/annotations.json`），`semantic/` 同理，
+两者无需导出。`yolo` 从 COCO 派生 ultralytics 训练布局
+（`images/ labels/ train/val + data.yaml`）。
+
+| 选项 | 说明 |
+|---|---|
+| `--format yolo` | 生成 ultralytics 训练布局（唯一需要导出的派生格式） |
+| `--split 0.8` | 训练集占比（<1.0 时同时生成 val） |
+
+### 5.5 validate — QA 质检
+
+```
+assistlabel validate -c run.yaml [--sample 50] [--report PATH]
+```
+
+生成 `report.html`（类别分布、置信度直方图、深度有效率）与
+`review_list.txt`（按最低置信度排序的人工复核清单，`--sample` 控制条数）。
+
+### 5.6 verify — 产物完整性校验
+
+```
+assistlabel verify -c run.yaml [--repair]
+```
+
+逐项检查 "done" 产物的完整性：深度 PNG 可读/uint16/有效率、语义 PNG、
+detect COCO 可解析、源图内容是否变更（stale）。`--repair` 把损坏条目
+重置为待处理，随后 `run --resume` 只重做坏图。
+
+### 5.7 models — 模型注册表
+
+```
+assistlabel models list [--kind depth|detect_segment]   # 浏览模型（含中文说明）
+assistlabel models info KEY                             # 单个模型完整规格
+assistlabel models download KEY [--source auto]         # 预下载权重
+assistlabel models check                                # 环境体检
+```
+
+### 5.8 help — 查询命令用法
+
+```
+assistlabel help                  # 顶层命令列表
+assistlabel help run              # run 的用法与选项
+assistlabel help models download  # 多级子命令
+```
+
+### 5.9 关键配置项（run.yaml）
 
 ```yaml
-tasks: [depth, detect, fuse]   # 任意子集
+tasks: [depth, detect]         # 任意子集
+download:
+  source: auto                 # auto = ModelScope 优先，HF 兜底
 depth:
-  model: da3-metric-L          # 注册表 key（DA3 米制；备选 da2-metric-* / da3-mono-L）
-  half: true                   # fp16 推理
+  model: da3-metric-L          # 注册表 key（备选 da3-mono-L / da2-metric-*）
+  batch_size: 8                # GPU 批量；32G 显存建议 8~16，OOM 减半
+  viz: true                    # 深度伪彩预览
 detect:
+  model: sam3
   conf_thres: 0.5              # 置信度阈值
   nms_iou: 0.7                 # 类内 NMS
-  mask_to: polygon             # polygon(可编辑/近似) | rle(像素级精确)
-fuse:
-  stats: [median, min, max]    # 写入 shape.extra 的深度统计
 ```
+
+自定义模型：把新的 YAML 放进任意目录，设 `ASSISTLABEL_MODELS_DIR` 指向它即可
+覆盖/追加注册表（格式参照 `assistlabel/config/models/`）。
 
 自定义模型：把新的 YAML 放进任意目录，设 `ASSISTLABEL_MODELS_DIR` 指向它即可
 覆盖/追加注册表（格式参照 `assistlabel/config/models/`）。
