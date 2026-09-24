@@ -89,11 +89,14 @@ assistlabel run -c mydata/run.yaml --limit 20
 # 4) 全量：Ctrl+C 随时中断，重跑自动跳过已完成图像
 assistlabel run -c mydata/run.yaml
 
-# 5) 校验 + 质检
+# 5) 生成可视化（detect_viz/semantic_viz/depth_viz，人工核对用）
+assistlabel viz -c mydata/run.yaml
+
+# 6) 校验 + 质检
 assistlabel verify -c mydata/run.yaml --repair    # 完整性校验（--repair 重置坏条目）
 assistlabel validate -c mydata/run.yaml --sample 50   # QA 报告 + 低置信度复核清单
 
-# 6) 导出训练格式
+# 7) 导出训练格式
 assistlabel export -c mydata/run.yaml --format yolo --split 0.8  # ultralytics 布局
 ```
 
@@ -155,9 +158,9 @@ out_dir/
 │   └── xxx.png         # 单通道 uint8 语义掩码（像素值=类别索引）
 ├── depth/
 │   └── xxx.png         # 16-bit PNG，uint16 毫米，depth_m = pixel/1000，无效=0
-├── detect_viz/         # 检测叠加图（实例掩码半透明 + 框 + 类别/分数）
-├── semantic_viz/       # 语义掩码彩色预览
-├── depth_viz/          # 深度 turbo 伪彩
+├── detect_viz/         # 检测叠加图（assistlabel viz 生成）
+├── semantic_viz/       # 语义掩码彩色预览（assistlabel viz 生成）
+├── depth_viz/          # 深度 turbo 伪彩（assistlabel viz 生成）
 ├── report.html         # validate 产物：类别分布、置信度直方图、深度有效率
 └── review_list.txt     # 按置信度分层的待人工复核清单
 
@@ -227,7 +230,17 @@ assistlabel export -c run.yaml --format yolo [--split 0.75]
 | `--format yolo` | 生成 ultralytics 训练布局 |
 | `--split 0.8` | 训练集占比（<1.0 时同时生成 val） |
 
-### 5.5 validate — QA 质检
+### 5.5 viz — 生成可视化
+
+```
+assistlabel viz -c run.yaml [--kind depth,detect,semantic]
+```
+
+从已有标注产物生成/刷新三个可视化目录（不重新推理，可重复执行）：
+`depth_viz/`（深度伪彩）、`detect_viz/`（检测叠加）、`semantic_viz/`（语义彩色）。
+适合在 `run` 之后按需生成，也可随时重刷。
+
+### 5.6 validate — QA 质检
 
 ```
 assistlabel validate -c run.yaml [--sample 50] [--report PATH]
@@ -236,7 +249,7 @@ assistlabel validate -c run.yaml [--sample 50] [--report PATH]
 生成 `report.html`（类别分布、置信度直方图、深度有效率）与
 `review_list.txt`（按最低置信度排序的人工复核清单，`--sample` 控制条数）。
 
-### 5.6 verify — 产物完整性校验
+### 5.7 verify — 产物完整性校验
 
 ```
 assistlabel verify -c run.yaml [--repair]
@@ -246,7 +259,7 @@ assistlabel verify -c run.yaml [--repair]
 COCO 可解析、源图内容是否变更（stale）。`--repair` 把损坏条目
 重置为待处理，随后 `run --resume` 只重做坏图。
 
-### 5.7 models — 模型注册表
+### 5.8 models — 模型注册表
 
 ```
 assistlabel models list [--kind depth|detect_segment]   # 浏览模型（含中文说明）
@@ -255,7 +268,7 @@ assistlabel models download KEY [--source auto]         # 预下载权重
 assistlabel models check                                # 环境体检
 ```
 
-### 5.8 help — 查询命令用法
+### 5.9 help — 查询命令用法
 
 ```
 assistlabel help                  # 顶层命令列表

@@ -77,8 +77,6 @@ def _verify_detect(cfg: RunConfig, key: str) -> list[Issue]:
         return [Issue(key, "detect", "corrupt", f"{sem.name} is not readable")]
     if raw.dtype != np.uint8:
         return [Issue(key, "detect", "corrupt", f"expected uint8, got {raw.dtype}")]
-    if cfg.detect.viz and not paths["detect_viz"].exists():
-        return [Issue(key, "detect", "missing", f"{paths['detect_viz'].name} not found")]
     return []
 
 

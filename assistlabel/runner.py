@@ -52,8 +52,10 @@ from .io.annotations import (
     rle_encode,
 )
 from .io.dataset import file_hash, out_paths, scan_images
-from .io.depth_io import read_depth_png, save_depth_color, save_depth_png
+from .io.depth_io import pseudocolor, read_depth_png, save_depth_png
 from .viz.overlay import draw_detections
+
+import json as _json  # build_viz 读取 detect COCO 使用
 
 console = Console()
 
@@ -143,8 +145,6 @@ def make_depth_writer(cfg: RunConfig):
             raise ValueError(f"depth max {dmax:.1f}m exceeds 200m sanity bound")
 
         save_depth_png(depth, paths["depth_png"], compression=cfg.depth.png_compression)
-        if cfg.depth.viz:
-            save_depth_color(depth, paths["depth_viz"])
         return {
             "source_image_hash": file_hash(image_path),
             "model": cfg.depth.model,
@@ -281,6 +281,95 @@ def _run_depth_phase(
     write_pool.shutdown(wait=True)
 
 
+
+
+# ---------------------------------------------------------------------------
+# viz builder: 从已有标注产物生成/刷新 *_viz 可视化（不重新推理）
+# ---------------------------------------------------------------------------
+def build_viz(
+    cfg: RunConfig,
+    kinds: list[str] | None = None,
+    limit: int | None = None,
+) -> dict:
+    """Regenerate ``depth_viz/ detect_viz/ semantic_viz/`` from stored
+    annotations. Never re-runs inference; safe to repeat (overwrites).
+
+    ``kinds`` filters which visualizations to build (default all).
+    """
+    import json as _json
+
+    tasks = set(kinds or ["depth", "detect", "semantic"])
+    out_dir = Path(cfg.dataset.out_dir)
+    counts = {"depth": 0, "detect": 0, "semantic": 0}
+
+    # depth: depth/*.png -> depth_viz/*.jpg（turbo 伪彩）
+    if "depth" in tasks:
+        depth_viz = out_dir / "depth_viz"
+        depth_viz.mkdir(parents=True, exist_ok=True)
+        for p in sorted((out_dir / "depth").glob("*.png")):
+            d = read_depth_png(p)
+            _write_image_jpg(depth_viz / (p.stem + ".jpg"), pseudocolor(d))
+            counts["depth"] += 1
+
+    # semantic: semantic/*.png -> semantic_viz/*.jpg（固定调色板按类别上色）
+    if "semantic" in tasks:
+        sem_dir = out_dir / "semantic"
+        sem_viz_dir = out_dir / "semantic_viz"
+        sem_viz_dir.mkdir(parents=True, exist_ok=True)
+        palette = np.array([
+            [0, 0, 0], [180, 119, 31], [255, 127, 14], [44, 160, 44],
+            [214, 39, 40], [148, 103, 189], [140, 86, 75], [227, 119, 194],
+            [127, 127, 127], [31, 119, 180], [255, 127, 14], [44, 160, 44],
+            [214, 39, 40], [148, 103, 189], [140, 86, 75], [227, 119, 194],
+        ], dtype=np.uint8)  # 与 semantic/classes.txt 的索引一一对应（0=背景黑）
+        for p in sorted(sem_dir.glob("*.png")):
+            m = cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
+            if m is None:
+                continue
+            color = palette[np.clip(m, 0, len(palette) - 1)]
+            _write_image_jpg(sem_viz_dir / (p.stem + ".jpg"), color)
+            counts["semantic"] += 1
+
+    # detect: COCO anns -> detect_viz/*.jpg（在源图上叠加 RLE 实例掩码 + 框 + 标签）
+    if "detect" in tasks:
+        from .io.annotations import coco_load, rle_decode
+
+        coco_path = out_dir / "detect" / "annotations.json"
+        if not coco_path.exists():
+            console.print(f"[yellow]detect: 跳过（未找到 {coco_path}），先运行 detect 任务[/]")
+            return counts
+        coco = coco_load(coco_path)
+        cats = {c["id"]: c["name"] for c in coco.get("categories", [])}
+        anns_by_img: dict[int, list[dict]] = {}
+        for ann in coco.get("annotations", []):
+            anns_by_img.setdefault(ann["image_id"], []).append(ann)
+        detect_viz_dir = out_dir / "detect_viz"
+        detect_viz_dir.mkdir(parents=True, exist_ok=True)
+
+        from .core.engine import Detection as _Det
+
+        for im in coco.get("images", []):
+            src = Path(cfg.dataset.image_dir) / im["file_name"]
+            if not src.exists():
+                console.print(f"[yellow]detect: 源图缺失 {im['file_name']}，跳过[/]")
+                continue
+            rgb = _read_image_rgb(src)
+            dets: list[Detection] = []
+            for ann in anns_by_img.get(im["id"], []):
+                cat = cats.get(ann["category_id"], "?")
+                mask = rle_decode(ann["segmentation"])
+                bx = ann.get("bbox", [0, 0, 0, 0])
+                dets.append(Detection(
+                    label=cat, score=float(ann.get("score", 1.0)),
+                    box=(float(bx[0]), float(bx[1]), float(bx[0] + bx[2]), float(bx[1] + bx[3])),
+                    mask=mask,
+                ))
+            vis = draw_detections(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), dets)
+            _write_image_jpg(detect_viz_dir / (Path(im["file_name"]).stem + ".jpg"), vis)
+            counts["detect"] += 1
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # detect phase: pipelined (prefetch decode | (image,prompt) pairs | async writes)
 # ---------------------------------------------------------------------------
@@ -303,18 +392,15 @@ def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
                        class_ids: dict[str, int]):
     """fn(image_path, rgb, dets) -> fragment for the COCO store.
 
-    Writes ``semantic/<stem>.png`` (class-index), ``semantic_viz/<stem>.jpg``
-    (color preview) and ``detect_viz/<stem>.jpg`` (overlay), and returns a
-    COCO fragment (image entry + RLE annotations, standard fields only).
+    Writes ``semantic/<stem>.png`` (class-index annotation) and returns a COCO
+    fragment (image entry + RLE annotations, standard fields only).
 
     dets arrive labeled with their SAM3 prompt; the prompt -> ontology class
     mapping (from prompts_by_class) is applied here — single mapping point.
+    可视化（detect_viz / semantic_viz）不在此处生成，统一由
+    ``assistlabel viz`` 按需产出。
     """
     prompt_to_class = {p: c for c, p in prompts_by_class}
-    viz_palette = np.array([
-        [0, 0, 0], [31, 119, 180], [255, 127, 14], [44, 160, 44],
-        [214, 39, 40], [148, 103, 189], [140, 86, 75], [227, 119, 194],
-    ], dtype=np.uint8)
 
     def write(image_path: Path, rgb: np.ndarray, dets: list[Detection]) -> dict:
         paths = out_paths(cfg.dataset.out_dir, image_path, cfg.dataset.image_dir)
@@ -347,11 +433,6 @@ def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
         from .io.depth_io import imwrite_safe
 
         imwrite_safe(paths["semantic_png"], canvas)
-        imwrite_safe(paths["semantic_viz"], viz_palette[np.clip(canvas, 0, len(viz_palette) - 1)])
-        if cfg.detect.viz:
-            _write_image_jpg(paths["detect_viz"],
-                             draw_detections(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), dets,
-                                             class_ids=class_ids))
         return {
             "image": {"file_name": _relative_name(image_path, cfg.dataset.image_dir),
                       "width": w, "height": h},

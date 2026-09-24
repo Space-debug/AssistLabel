@@ -15,7 +15,7 @@ from assistlabel.io.annotations import export_ultralytics, load_labelme
 from assistlabel.io.dataset import out_paths, scan_images
 from assistlabel.io.depth_io import read_depth_png
 from assistlabel.qa import collect_stats, sample_review_list, write_report
-from assistlabel.runner import run_pipeline
+from assistlabel.runner import build_viz, run_pipeline
 
 
 @pytest.fixture
@@ -73,23 +73,34 @@ def test_full_pipeline_mock(project):
     out = project.dataset.out_dir
     images = scan_images(project.dataset.image_dir)
 
+    # run 只产标注（深度/语义 PNG + COCO），不产任何可视化
     for image in images:
         stem = image.stem
         depth = read_depth_png(out / "depth" / f"{stem}.png")
         assert depth.shape == (120, 160) and depth.max() > 0
-        assert (out / "depth_viz" / f"{stem}.jpg").exists()
+        assert (out / "semantic" / f"{stem}.png").exists()
+        assert not (out / "depth_viz" / f"{stem}.jpg").exists()
+        assert not (out / "detect_viz" / f"{stem}.jpg").exists()
 
+    # viz 按需生成：覆盖 depth/detect/semantic 三类
+    counts = build_viz(project, ["depth", "detect", "semantic"])
+    assert counts == {"depth": 4, "detect": 4, "semantic": 4}
+
+    for image in images:
+        stem = image.stem
+        assert (out / "depth_viz" / f"{stem}.jpg").exists()
+        assert (out / "semantic_viz" / f"{stem}.jpg").exists()
+        assert (out / "detect_viz" / f"{stem}.jpg").exists()
+
+        # COCO: 2 instances per image (one per ontology class), RLE masks
         coco = _coco(project)
         anns = _anns_for(project, image)
-        assert len(anns) == 2  # one per ontology class
+        assert len(anns) == 2
         for ann in anns:
             assert isinstance(ann["segmentation"], dict) and ann["segmentation"]["counts"]
             assert ann["bbox"][2] > 0 and ann["bbox"][3] > 0
             # 标准 COCO 字段，不含非标的深度扩展
             assert "depth_median_m" not in ann
-        assert (out / "semantic" / f"{stem}.png").exists()
-        assert (out / "semantic_viz" / f"{stem}.jpg").exists()
-        assert (out / "detect_viz" / f"{stem}.jpg").exists()
 
     # semantic class indices limited to ontology ids {1, 2}
     sem = cv2.imread(str(out / "semantic" / "img_00.png"), cv2.IMREAD_UNCHANGED)

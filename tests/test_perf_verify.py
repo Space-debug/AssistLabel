@@ -10,6 +10,7 @@ from assistlabel.core.config import load_run_config
 from assistlabel.core.pipeline import Manifest
 from assistlabel.io.dataset import out_paths, scan_images
 from assistlabel.io.depth_io import read_depth_png
+from assistlabel.cli import app
 from assistlabel.runner import run_pipeline
 from assistlabel.verify import verify_outputs, repair
 
@@ -56,7 +57,8 @@ def test_batched_depth_phase(project):
         assert paths["depth_png"].exists()
         depth = read_depth_png(paths["depth_png"])
         assert depth.ndim == 2 and depth.max() > 0
-        assert paths["depth_viz"].exists()
+        # run 只产标注（16-bit PNG）；可视化由 assistlabel viz 按需生成
+        assert not paths["depth_viz"].exists()
 
 
 def test_corrupt_image_isolated(tmp_path):
@@ -121,3 +123,22 @@ def test_limit_pilot_run(project):
     assert report.total == 2 and report.processed == 2
     manifest = Manifest(out_paths(project.dataset.out_dir, "x")["manifest"])
     assert len(manifest.records) == 2
+
+
+def test_viz_command_generates_previews(project):
+    """assistlabel viz：从已有标注产物生成三类可视化。"""
+    from typer.testing import CliRunner
+
+    from assistlabel.cli import app
+
+    run_pipeline(project, ["depth", "detect"], resume=False)
+    out = project.dataset.out_dir
+    assert not (out / "depth_viz").exists()  # run 不产 viz
+
+    run_yaml = project.dataset.out_dir.parent / "run.yaml"
+    r = CliRunner().invoke(app, ["viz", "--config", str(run_yaml)])
+    assert r.exit_code == 0
+
+    for d in ("depth_viz", "detect_viz", "semantic_viz"):
+        files = list((out / d).glob("*"))
+        assert files, f"{d} 未生成"

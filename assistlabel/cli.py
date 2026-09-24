@@ -50,9 +50,6 @@ depth:
   prefetch: 4                  # decoded images kept ready ahead of the GPU
   write_workers: 2             # PNG/meta write threads overlapping inference
   png_compression: 3           # 0 fastest / 9 smallest
-  save_raw: true               # 16-bit PNG, millimeters
-  save_color: true             # pseudo-color JPG for eyeballing
-  save_npz: false
 
 detect:
   model: "{detect_model}"
@@ -62,9 +59,8 @@ detect:
   conf_thres: 0.5
   max_objects_per_prompt: 50
   nms_iou: 0.7
-  save_viz: true
   prefetch: 2                  # decoded images kept ready ahead of the GPU
-  write_workers: 2             # labelme/viz write threads overlapping inference
+  write_workers: 2             # COCO/semantic write threads overlapping inference
 
 """
 
@@ -253,55 +249,52 @@ def detect_config_changed(cfg, manifest) -> bool:
 @app.command(help="导出标注：yolo=ultralytics 布局（semantic/depth 由 run 原生产出）")
 def export(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
-    fmt: str = typer.Option("coco", "--format", help="coco | yolo | semantic"),
-    split: float = typer.Option(1.0, "--split", help="Train fraction (<1.0 writes a val split too)."),
-    segmentation: str = typer.Option("polygon", "--segmentation", help="COCO: polygon | rle"),
-    viz: bool = typer.Option(False, "--viz", help="semantic: also write color-coded preview PNGs"),
+    fmt: str = typer.Option("yolo", "--format", help="yolo（ultralytics 训练布局）"),
+    split: float = typer.Option(0.75, "--split", help="Train fraction (<1.0 writes a val split too)."),
 ):
-    """Export labelme labels to COCO / YOLO (ultralytics) / semantic mask format."""
-    from .io.annotations import export_coco, export_semantic, export_ultralytics
-    from .core.ontology import load_ontology
+    """从 detect 的 COCO 标注导出 ultralytics 训练布局。
+
+    detect/annotations.json 本身就是标准 COCO，可直接用 pycocotools 读取；
+    yolo 布局按需从此派生。
+    """
+    from .io.annotations import export_ultralytics
+    from .io.dataset import scan_images
 
     cfg = _load_cfg(config)
-    classes = [c.name for c in load_ontology(cfg.detect.ontology)]
-    paths = out_paths(cfg.dataset.out_dir, "x")  # only need dirs
-    labels_dir = Path(paths["labelme"]).parent
-
-    if fmt == "coco":
-        out_json = Path(paths["coco"])
-        coco = export_coco(labels_dir, out_json, classes, segmentation=segmentation,
-                           split=split, image_dir=cfg.dataset.image_dir)
-        n_val = ""
-        if split < 1.0:
-            n_val = f" (+val: {out_json.parent / 'annotations_val.json'})"
-        console.print(
-            f"COCO -> [cyan]{out_json}[/]: {len(coco['images'])} images, "
-            f"{len(coco['annotations'])} annotations{n_val}"
-        )
-    elif fmt == "yolo":
-        from .io.dataset import scan_images
-
-        out_dir = Path(cfg.dataset.out_dir) / "ultralytics"
-        stats = export_ultralytics(
-            labels_dir, out_dir, classes,
-            image_files=scan_images(cfg.dataset.image_dir, cfg.dataset.patterns),
-            split=split,
-        )
-        console.print(
-            f"YOLO -> [cyan]{out_dir}[/]: train={stats['train']} val={stats['val']} "
-            "(images/ labels/ data.yaml)"
-        )
-    elif fmt == "semantic":
-        out_dir = Path(cfg.dataset.out_dir) / "semantic"
-        n = export_semantic(labels_dir, out_dir, classes, viz=viz)
-        console.print(
-            f"Semantic -> [cyan]{out_dir}[/]: {n} class-index PNGs "
-            "(0=background, i=ontology order) (+classes.txt)"
-            + (f" + 彩色预览 {out_dir.parent / 'semantic_viz'}" if viz else "")
-        )
-    else:
-        err_console.print(f"Unknown format: {fmt}")
+    if fmt != "yolo":
+        err_console.print(f"Unknown format: {fmt}（semantic/depth 由 run 原生产出，无需导出）")
         raise typer.Exit(code=2)
+
+    coco_json = Path(cfg.dataset.out_dir) / "detect" / "annotations.json"
+    if not coco_json.exists():
+        err_console.print(f"未找到 {coco_json}，请先运行 detect 任务")
+        raise typer.Exit(code=1)
+
+    out_dir = Path(cfg.dataset.out_dir) / "ultralytics"
+    stats = export_ultralytics(
+        coco_json, out_dir, image_dir=cfg.dataset.image_dir, split=split,
+    )
+    console.print(
+        f"YOLO -> [cyan]{out_dir}[/]: train={stats['train']} val={stats['val']} "
+        "(images/ labels/ data.yaml)"
+    )
+
+
+@app.command("viz")
+def viz_cmd(
+    config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
+    kind: str = typer.Option("depth,detect,semantic", "--kind",
+                             help="逗号分隔: depth,detect,semantic"),
+):
+    """从已有标注产物生成/刷新可视化（depth_viz/detect_viz/semantic_viz），不重新推理。"""
+    from .runner import build_viz
+
+    cfg = _load_cfg(config)
+    counts = build_viz(cfg, [k.strip() for k in kind.split(",")])
+    console.print(
+        f"可视化已生成: depth_viz={counts['depth']} 张, detect_viz={counts['detect']} 张, "
+        f"semantic_viz={counts['semantic']} 张"
+    )
 
 
 @app.command(help="QA 质检：类别分布/置信度/深度有效率报告 + 复核清单")

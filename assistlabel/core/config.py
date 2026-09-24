@@ -27,7 +27,6 @@ class DepthCfg(BaseModel):
     prefetch: int = Field(default=4, ge=1, description="Decoded images kept ahead of the GPU")
     write_workers: int = Field(default=2, ge=1, description="Threads writing PNGs while GPU infers")
     png_compression: int = Field(default=3, ge=0, le=9, description="PNG compression (0 fastest, 9 smallest)")
-    viz: bool = True  # pseudo-color JPG preview into depth_viz/
 
 
 class DetectCfg(BaseModel):
@@ -38,7 +37,6 @@ class DetectCfg(BaseModel):
     conf_thres: float = Field(default=0.5, ge=0.0, le=1.0)
     max_objects_per_prompt: int = Field(default=50, ge=1)
     nms_iou: float = Field(default=0.7, gt=0.0, le=1.0)
-    viz: bool = True  # overlay preview into detect_viz/
     prefetch: int = Field(default=2, ge=1, description="Decoded images kept ahead of the GPU")
     write_workers: int = Field(default=2, ge=1, description="Threads writing COCO/semantic while GPU infers")
 
