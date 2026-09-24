@@ -9,7 +9,7 @@ models:
     hf_id: depth-anything/DA3METRIC-LARGE
     ms_id: depth-anything/DA3METRIC-LARGE
     domain: metric
-    notes: "0.35B, Apache-2.0. Metric scale via estimated focal. Recommended default."
+    notes: "0.35B 参数，Apache-2.0，米制深度（绝对尺度，室内外通用）。推荐默认。"
 
   - key: da3-mono-L
     provider: depth_anything3
@@ -17,4 +17,4 @@ models:
     hf_id: depth-anything/DA3MONO-LARGE
     ms_id: depth-anything/DA3MONO-LARGE
     domain: relative
-    notes: "0.35B, Apache-2.0. Monocular relative depth (predicted directly, not disparity)."
+    notes: "0.35B 参数，Apache-2.0，相对深度（无绝对尺度）。"

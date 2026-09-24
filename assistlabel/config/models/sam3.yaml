@@ -12,7 +12,7 @@ models:
     domain: any
     params:
       prompt_batch: 4   # prompts per forward pass (image repeated per prompt)
-    notes: "transformers>=5 loader, pure pip install. Image detection/segmentation."
+    notes: "transformers 加载（纯 pip 免克隆）。图片检测+实例分割，文本提示。"
 
   - key: mock-detect
     provider: mock_detect

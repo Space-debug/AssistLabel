@@ -9,35 +9,35 @@ models:
     kind: depth
     hf_id: depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
     domain: indoor
-    notes: "Metric depth, indoor scenes (Hypersim). ~335M params."
+    notes: "米制深度，室内场景优化（Hypersim 训练）。335M 参数。"
 
   - key: da2-metric-outdoor-L
     provider: depth_anything
     kind: depth
     hf_id: depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
     domain: outdoor
-    notes: "Metric depth, outdoor/driving scenes (Virtual KITTI)."
+    notes: "米制深度，驾驶/室外场景（Virtual KITTI 训练）。"
 
   - key: da2-metric-indoor-B
     provider: depth_anything
     kind: depth
     hf_id: depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
     domain: indoor
-    notes: "Faster/ lighter indoor metric variant (97M)."
+    notes: "室内米制轻量版（97M，速度快）。"
 
   - key: da2-metric-outdoor-B
     provider: depth_anything
     kind: depth
     hf_id: depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
     domain: outdoor
-    notes: "Faster/ lighter outdoor metric variant."
+    notes: "室外米制轻量版（97M，速度快）。"
 
   - key: da2-relative-L
     provider: depth_anything
     kind: depth
     hf_id: depth-anything/Depth-Anything-V2-Large-hf
     domain: relative
-    notes: "Relative depth only - no absolute scale (see PLAN.md 3.2)."
+    notes: "仅相对深度（无绝对尺度），适合单目相对深度下游。"
 
   - key: mock-depth
     provider: mock_depth

@@ -369,15 +369,27 @@ def verify(
 
 # ---------------------------------------------------------------------------
 @models_app.command("list")
-def models_list():
-    """List all registered models."""
+def models_list(
+    kind: str = typer.Option(None, "--kind", help="按类型过滤: depth | detect_segment"),
+):
+    """List all registered models (含说明，便于挑选后再下载)。"""
     registry = ModelRegistry.load()
-    table = Table(title="Model registry")
-    for col in ("key", "provider", "kind", "domain", "hf_id"):
-        table.add_column(col)
-    for spec in registry.all():
-        table.add_row(spec.key, spec.provider, spec.kind, spec.domain, spec.hf_id)
+    models = [m for m in registry.all()
+              if kind is None or m.kind == kind or m.provider == kind]
+    table = Table(title="Model registry — 挑选后执行 assistlabel models download <key>")
+    for col, w in (("key", None), ("kind", None), ("适用", None), ("权重仓库", None), ("说明", 46)):
+        table.add_column(col, overflow="fold" if w else None, max_width=w)
+    kind_cn = {"depth": "深度", "detect_segment": "检测+实例分割", "video": "视频"}
+    for spec in models:
+        domain_cn = {"metric": "米制深度", "relative": "相对深度",
+                     "indoor": "室内", "outdoor": "室外", "any": "通用"}.get(spec.domain, spec.domain)
+        table.add_row(
+            f"[bold]{spec.key}[/]", kind_cn.get(spec.kind, spec.kind),
+            domain_cn, spec.hf_id or "-",
+            (spec.notes or "-")[:56],
+        )
     console.print(table)
+    console.print("下载: assistlabel models download <key>   详情: assistlabel models info <key>")
 
 
 @models_app.command("info")
