@@ -1,11 +1,7 @@
-"""AssistLabel CLI.
+"""AssistLabel CLI — 批量自动标注：Depth Anything 深度真值 + SAM3 检测/实例分割。
 
-Commands:
-  init      Scaffold run.yaml + ontology.yaml
-  run       batch pipeline (depth / detect, resumable)
-  export    labelme -> COCO / YOLO
-  validate  QA report + stratified review list
-  models    registry inspection + environment preflight
+所有命令与子命令都支持 --help 查询用法（如 assistlabel run --help），
+也可用 assistlabel help <命令> 查看。
 """
 
 from __future__ import annotations
@@ -124,7 +120,7 @@ def _pick_default(registry: ModelRegistry, kind: str, preference: list[str]) -> 
     return next(iter(models), None)
 
 
-@app.command()
+@app.command(help="生成项目配置：run.yaml + ontology.yaml + data/raw 目录")
 def init(
     dir: Path = typer.Option(Path("."), "--dir", help="Project directory to scaffold."),
     engine: str = typer.Option("auto", "--engine", help="auto | mock (mock = no GPU deps, for pipeline testing)."),
@@ -151,7 +147,7 @@ def init(
                   "  assistlabel run -c run.yaml")
 
 
-@app.command()
+@app.command(help="批量标注流水线：断点续跑、崩溃安全；depth+detect 串行执行")
 def run(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
     tasks: str = typer.Option(None, "--tasks", help="Comma list overriding config tasks, e.g. depth,detect."),
@@ -183,7 +179,7 @@ def run(
         raise typer.Exit(code=1)
 
 
-@app.command()
+@app.command(help="查看各任务进度（done/failed/pending/ETA），只读不执行")
 def status(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
     tasks: str = typer.Option(None, "--tasks", help="Comma list of tasks to report (default: config tasks)."),
@@ -254,7 +250,7 @@ def detect_config_changed(cfg, manifest) -> bool:
 
 
 
-@app.command()
+@app.command(help="导出标注：yolo=ultralytics 布局（semantic/depth 由 run 原生产出）")
 def export(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
     fmt: str = typer.Option("coco", "--format", help="coco | yolo | semantic"),
@@ -308,7 +304,7 @@ def export(
         raise typer.Exit(code=2)
 
 
-@app.command()
+@app.command(help="QA 质检：类别分布/置信度/深度有效率报告 + 复核清单")
 def validate(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
     report_path: Path = typer.Option(None, "--report", help="HTML report output path."),
@@ -338,7 +334,7 @@ def validate(
         console.print(f"Review list ({len(review)} images, lowest-confidence first) -> [cyan]{list_path}[/]")
 
 
-@app.command()
+@app.command(help="产物完整性校验：撕裂写/源图变更检测，--repair 重置坏条目")
 def verify(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
     repair: bool = typer.Option(False, "--repair", help="Reset broken manifest entries for reprocessing."),
@@ -367,12 +363,40 @@ def verify(
         console.print("Run again with --repair to reset these entries for reprocessing.")
 
 
+@app.command("help")
+def help_cmd(
+    command: list[str] = typer.Argument(
+        None, help="要查询的命令名，支持多级：run / models / models download"
+    ),
+):
+    """显示命令的使用说明（等同 --help），支持多级子命令。"""
+    import click
+
+    import typer.main
+
+    root = typer.main.get_command(app)
+    ctx = click.Context(root, info_name="assistlabel")
+    target = root
+    for part in command or []:
+        # 鸭子类型判断 Group（部分环境下 isinstance 检查不可靠）
+        if not hasattr(target, "get_command"):
+            err_console.print(f"'{' '.join(command)}' 没有子命令 '{part}'")
+            raise typer.Exit(code=2)
+        sub = target.get_command(ctx, part)
+        if sub is None:
+            err_console.print(f"未知命令 '{part}'（assistlabel --help 查看全部命令）")
+            raise typer.Exit(code=2)
+        ctx = click.Context(sub, parent=ctx, info_name=part)
+        target = sub
+    console.print(target.get_help(ctx))
+
+
 # ---------------------------------------------------------------------------
 @models_app.command("list")
 def models_list(
     kind: str = typer.Option(None, "--kind", help="按类型过滤: depth | detect_segment"),
 ):
-    """List all registered models (含说明，便于挑选后再下载)。"""
+    """浏览所有已注册模型（含中文说明，挑选后再下载）。"""
     registry = ModelRegistry.load()
     models = [m for m in registry.all()
               if kind is None or m.kind == kind or m.provider == kind]
@@ -393,8 +417,8 @@ def models_list(
 
 
 @models_app.command("info")
-def models_info(key: str = typer.Argument(...)):
-    """Show one model's full spec."""
+def models_info(key: str = typer.Argument(..., help="模型 key，见 models list")):
+    """查看单个模型的完整规格。"""
     registry = ModelRegistry.load()
     try:
         spec = registry.get(key)
@@ -406,10 +430,10 @@ def models_info(key: str = typer.Argument(...)):
 
 @models_app.command("download")
 def models_download(
-    key: str = typer.Argument(...),
+    key: str = typer.Argument(..., help="模型 key，见 models list"),
     source: str = typer.Option("auto", "--source", help="auto | modelscope | huggingface"),
 ):
-    """Pre-download weights for a registry model (ModelScope first by default)."""
+    """预下载模型权重（默认 ModelScope 优先，国内直连）。"""
     from . import hub
     from .core.registry import KIND_DEPTH, ModelRegistry
 
@@ -448,7 +472,7 @@ def models_download(
 
 @models_app.command("check")
 def models_check():
-    """Environment preflight: torch/CUDA, transformers, sam3, HF token, weights."""
+    """环境体检：torch/CUDA、transformers、modelscope、下载源逐项检查。"""
     import importlib.util
     import os
 
