@@ -142,3 +142,40 @@ def test_viz_command_generates_previews(project):
     for d in ("depth_viz", "detect_viz", "semantic_viz"):
         files = list((out / d).glob("*"))
         assert files, f"{d} 未生成"
+
+
+def test_viz_kind_independent(tmp_path):
+    """每种可视化可独立生成，互不影响。"""
+    import cv2 as _cv2
+    from typer.testing import CliRunner
+
+    from assistlabel.cli import app
+
+    raw = tmp_path / "raw"
+    raw.mkdir(parents=True)
+    rng = np.random.default_rng(7)
+    cv2.imwrite(str(raw / "solo.png"), rng.integers(0, 255, (60, 80, 3), dtype=np.uint8))
+    onto = tmp_path / "ontology.yaml"
+    onto.write_text("classes:\n  car: {prompt: 'car'}\n", encoding="utf-8")
+    run_yaml = tmp_path / "run.yaml"
+    run_yaml.write_text(yaml.safe_dump({
+        "dataset": {"image_dir": "raw", "out_dir": "out"},
+        "tasks": ["depth", "detect"],
+        "depth": {"model": "mock-depth", "device": "cpu"},
+        "detect": {"model": "mock-detect", "ontology": "ontology.yaml", "device": "cpu"},
+    }), encoding="utf-8")
+
+    runner = CliRunner()
+    run_pipeline(load_run_config(run_yaml), ["depth", "detect"], resume=False)
+
+    # 只生成 depth 可视化
+    r = runner.invoke(app, ["viz", "-c", str(run_yaml), "--kind", "depth"])
+    assert r.exit_code == 0
+    out = tmp_path / "out"
+    assert (out / "depth_viz").exists()
+    assert not (out / "detect_viz").exists()  # 未指定则不生成
+
+    # 补生成 detect 可视化
+    r = runner.invoke(app, ["viz", "-c", str(run_yaml), "--kind", "detect"])
+    assert r.exit_code == 0
+    assert (out / "detect_viz").exists()
