@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "assistlabel"
+version = "0.1.0"
+description = "Batch auto-labeling pipeline: Depth Anything depth ground truth + SAM3 detection/segmentation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "AssistLabel" }]
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+    "pillow>=10.0",
+    "pydantic>=2.5",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+depth = ["torch>=2.3", "transformers>=4.45"]
+ms = ["modelscope>=1.18"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+assistlabel = "assistlabel.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["assistlabel*"]
+
+[tool.setuptools.package-data]
+assistlabel = ["config/*.yaml", "config/models/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

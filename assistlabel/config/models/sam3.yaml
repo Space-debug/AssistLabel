@@ -1,0 +1,21 @@
+# SAM3 via HuggingFace transformers (pure pip, no repo clone).
+# transformers >= 5 ships Sam3Model/Sam3Processor; weights are the HF-format
+# model.safetensors (keys detector_model.*) on the ModelScope mirror of
+# facebook/sam3. NOTE: the native Meta package's sam3.pt (keys detector.*)
+# is a DIFFERENT format and is not used by this tool.
+models:
+  - key: sam3
+    provider: sam3
+    kind: detect_segment
+    hf_id: facebook/sam3
+    ms_id: facebook/sam3
+    domain: any
+    params:
+      prompt_batch: 4   # prompts per forward pass (image repeated per prompt)
+    notes: "transformers>=5 loader, pure pip install. Image detection/segmentation."
+
+  - key: mock-detect
+    provider: mock_detect
+    kind: detect_segment
+    domain: any
+    notes: "Deterministic synthetic detections for pipeline testing without GPU deps."

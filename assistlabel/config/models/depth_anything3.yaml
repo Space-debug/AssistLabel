@@ -1,0 +1,20 @@
+# Depth Anything 3 (ByteDance-Seed): any-view depth + pose, single transformer.
+# Requires the DA3 package from source (see engines/depth_anything3.py INSTALL_HINT).
+# Weights: ModelScope mirror depth-anything/DA3* (config.json + model.safetensors).
+# Apache-2.0 variants only; GIANT/LARGE(-1.1) nested models are CC BY-NC (excluded).
+models:
+  - key: da3-metric-L
+    provider: depth_anything3
+    kind: depth
+    hf_id: depth-anything/DA3METRIC-LARGE
+    ms_id: depth-anything/DA3METRIC-LARGE
+    domain: metric
+    notes: "0.35B, Apache-2.0. Metric scale via estimated focal. Recommended default."
+
+  - key: da3-mono-L
+    provider: depth_anything3
+    kind: depth
+    hf_id: depth-anything/DA3MONO-LARGE
+    ms_id: depth-anything/DA3MONO-LARGE
+    domain: relative
+    notes: "0.35B, Apache-2.0. Monocular relative depth (predicted directly, not disparity)."

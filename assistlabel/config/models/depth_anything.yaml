@@ -1,0 +1,46 @@
+# Depth Anything V2 variants (transformers-compatible "-hf" checkpoints).
+# ModelScope mirrors use the SAME repo ids as HuggingFace (org depth-anything),
+# so no ms_id entries are needed - download.source=auto fetches ModelScope first.
+# Metric models output meters; relative models have NO absolute scale
+# (fine for monocular rel-depth下游, not for metric ground truth).
+models:
+  - key: da2-metric-indoor-L
+    provider: depth_anything
+    kind: depth
+    hf_id: depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
+    domain: indoor
+    notes: "Metric depth, indoor scenes (Hypersim). ~335M params."
+
+  - key: da2-metric-outdoor-L
+    provider: depth_anything
+    kind: depth
+    hf_id: depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
+    domain: outdoor
+    notes: "Metric depth, outdoor/driving scenes (Virtual KITTI)."
+
+  - key: da2-metric-indoor-B
+    provider: depth_anything
+    kind: depth
+    hf_id: depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
+    domain: indoor
+    notes: "Faster/ lighter indoor metric variant (97M)."
+
+  - key: da2-metric-outdoor-B
+    provider: depth_anything
+    kind: depth
+    hf_id: depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
+    domain: outdoor
+    notes: "Faster/ lighter outdoor metric variant."
+
+  - key: da2-relative-L
+    provider: depth_anything
+    kind: depth
+    hf_id: depth-anything/Depth-Anything-V2-Large-hf
+    domain: relative
+    notes: "Relative depth only - no absolute scale (see PLAN.md 3.2)."
+
+  - key: mock-depth
+    provider: mock_depth
+    kind: depth
+    domain: any
+    notes: "Deterministic synthetic depth for pipeline testing without GPU deps."

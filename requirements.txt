@@ -1,0 +1,47 @@
+# AssistLabel 依赖清单（Python 3.12，GPU 推理环境）
+#
+# 推荐安装顺序（RTX 5090 等 Blackwell 显卡必须用 cu128 的 torch）：
+#   1) pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   2) pip install -r requirements.txt
+#   3) pip install -e .                                        # 本工具
+#   4) pip install --no-deps "depth-anything-3 @ git+https://github.com/ByteDance-Seed/Depth-Anything-3"
+#      （DA3 深度引擎，官方包未上 PyPI；--no-deps 避免拉入全量重依赖，运行依赖见下方 DA3 段）
+#
+# 本文件刻意不含 torch：必须用第 1 步的 cu128 专用源安装，
+# 直接从 PyPI 装到的是 CPU 版，GPU 不可用。
+
+# DA3 钉住 numpy<2（原生 sam3 同样要求）；opencv 5.0 的元数据虽然声明
+# numpy>=2，但 numpy 1.26 实测正常工作。
+numpy>=1.26,<2
+opencv-python-headless>=4.9
+pillow>=10.0
+pydantic>=2.5
+pyyaml>=6.0
+typer>=0.12
+rich>=13.0
+
+# 深度模型 DA2（transformers 生态）；SAM3 图片检测（transformers>=5 内置 SAM3）
+transformers>=5
+
+# ModelScope 下载源（国内直连，默认优先；HF 自动兜底）
+modelscope>=1.18
+
+# ---- Depth Anything 3 引擎的实测运行依赖（api.py 导入链所需）----
+einops
+omegaconf
+imageio
+moviepy<2                 # 2.x 移除了 moviepy.editor
+trimesh
+open3d
+pycolmap
+plyfile
+addict
+matplotlib
+evo
+scipy<1.14                # 兼容 numpy 1.26（新版 scipy 需要 numpy>=2）
+
+# 开发/测试
+pytest>=8.0
+
+# 可选：COCO RLE 格式导出（polygon 导出不需要它）
+# pycocotools
