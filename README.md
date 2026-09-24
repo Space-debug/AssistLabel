@@ -3,22 +3,20 @@
 基于 **Depth Anything V3 + SAM3** 的批量自动标注（预标注）流水线工具。
 
 - **深度真值**：Depth Anything V3（默认）/ V2 批量刷 16-bit 深度图（毫米，KITTI 约定）
-- **检测 + 分割**：SAM3 文本概念提示批量生成框、实例掩码、语义标签
-- **深度-检测融合**：每个目标写入中位/最小/最大深度（伪激光雷达标注的输入）
+- **检测 + 实例分割**：SAM3 文本概念提示批量生成框、RLE 实例掩码、语义标签
+- **语义分割**：同步产出按类别索引的单通道语义 PNG（0=背景）
 - **断点续跑**：manifest.jsonl 驱动，中断后重跑自动跳过已完成图像
-- **生态互通**：工作格式为 labelme（X-AnyLabeling 直接打开），可导出 COCO / YOLO
+- **生态互通**：detect 直接产出标准 COCO（ultralytics convert_coco 可读），可视化独立成 `*_viz` 目录
 
 设计文档见 [PLAN.md](PLAN.md)，迭代计划见 [IMPROVEMENTS.md](IMPROVEMENTS.md)。
-当前状态：Windows + RTX 5090 真机全流程验证通过，57 项单元/端到端测试。
+当前状态：Windows + RTX 5090 真机全流程验证通过，62 项单元/端到端测试。
 
 ---
 
-## 1. 环境搭建
+## 1. 安装
 
 > 本仓库已在 Windows + RTX 5090 上完整安装验证（conda env `assistlabel`，
-> Python 3.12.14 + torch 2.11.0+cu128，真实模型推理跑通，见 `smoke/` 示例）。
-
-### 1.1 环境搭建（GPU 推理，推荐直接用 requirements.txt）
+> Python 3.12.14 + torch 2.11.0+cu128，真实模型推理跑通）。
 
 ```bash
 cd /d/Code/AssistLabel
@@ -38,7 +36,7 @@ pip install --no-deps "depth-anything-3 @ git+https://github.com/ByteDance-Seed/
 
 # 4) 环境体检 + 预下载权重（ModelScope 直连）
 assistlabel models check
-assistlabel models download sam3           # SAM3 HF 格式 ~3.4GB（默认检测引擎）
+assistlabel models download sam3           # SAM3 ~3.4GB（默认检测引擎）
 assistlabel models download da3-metric-L   # DA3 米制深度 ~1.3GB（默认深度引擎）
 ```
 
@@ -48,15 +46,7 @@ assistlabel models download da3-metric-L   # DA3 米制深度 ~1.3GB（默认深
 > 的 `detector.*` 键格式与本工具不再相关；其视频跟踪 API 未被 transformers
 > 高层封装覆盖，故本工具暂不含视频模式。）
 
-### 1.2 仅跑流水线逻辑 / 开发 / 测试（无需 GPU）
-
-```bash
-python -m venv .venv && .venv\Scripts\activate
-pip install -e ".[dev]"
-pytest tests/ -q   # 56 passed
-```
-
-#### 权重下载源（ModelScope 优先）
+### 1.1 权重下载源与缓存
 
 `run.yaml` 中 `download.source` 控制所有模型的权重获取策略：
 
@@ -66,32 +56,22 @@ pytest tests/ -q   # 56 passed
 | `modelscope` | 只用 ModelScope，失败即报错 |
 | `huggingface` | 只用 HuggingFace |
 
-已验证的 ModelScope 仓库：`facebook/sam3`（HF 格式 safetensors + tokenizer）、
-`depth-anything/Depth-Anything-V2-*-hf` 全系列、`depth-anything/DA3METRIC-LARGE`、
-`depth-anything/DA3MONO-LARGE`。预下载/换源命令：
-`assistlabel models download <key> [--source auto]`，
-缓存位置由 ModelScope 默认管理（`%USERPROFILE%\.cache\modelscope`，可用 `MODELSCOPE_CACHE` 改）。
+已验证的 ModelScope 仓库：`facebook/sam3`、`depth-anything/Depth-Anything-V2-*-hf`
+全系列、`depth-anything/DA3METRIC-LARGE`、`depth-anything/DA3MONO-LARGE`。
+预下载/换源命令：`assistlabel models download <key> [--source auto]`。
 
-环境自检：
+| 来源 | 默认缓存位置 | 环境变量改位置 |
+|---|---|---|
+| ModelScope（默认优先） | `%USERPROFILE%\.cache\modelscope` | `MODELSCOPE_CACHE` |
+| HuggingFace（兜底） | `%USERPROFILE%\.cache\huggingface\hub` | `HF_HOME` |
 
-```bash
-assistlabel models check   # torch/CUDA、transformers、modelscope、HF_TOKEN 逐项体检
-```
+缓存全局共享：多个数据集项目复用同一份权重，只有首次下载有成本。
 
 ---
 
-## 2. 快速开始
+## 2. 快速上手
 
-### 2.1 无 GPU 冒烟验证（mock 引擎）
-
-```bash
-assistlabel init --dir demo --engine mock
-# 放几张图进 demo/data/raw，或用任意 jpg 试跑：
-assistlabel run -c demo/run.yaml
-assistlabel validate -c demo/run.yaml
-```
-
-### 2.2 真实标注完整工作流
+### 2.1 完整标注工作流
 
 ```bash
 # 1) 生成配置（默认 da3-metric-L 深度 + sam3 检测）
@@ -104,7 +84,7 @@ assistlabel init --dir mydata
 
 # 3) 试跑 20 张：先确认检出/深度合理，再放量（廉价试错）
 assistlabel run -c mydata/run.yaml --limit 20
-#    打开 mydata/labeled/detect_viz\ 和 semantic_viz\ 人工核对
+#    打开 mydata/labeled/ 下 detect_viz\ 与 semantic_viz\ 人工核对
 
 # 4) 全量：Ctrl+C 随时中断，重跑自动跳过已完成图像
 assistlabel run -c mydata/run.yaml
@@ -114,59 +94,34 @@ assistlabel verify -c mydata/run.yaml --repair    # 完整性校验（--repair �
 assistlabel validate -c mydata/run.yaml --sample 50   # QA 报告 + 低置信度复核清单
 
 # 6) 导出训练格式
-assistlabel export -c mydata/run.yaml --format coco            # COCO（实例分割+检测）
-assistlabel export -c mydata/run.yaml --format semantic --viz  # 语义分割 PNG + 彩色预览
 assistlabel export -c mydata/run.yaml --format yolo --split 0.8  # ultralytics 布局
 ```
 
-标注结果一览（`mydata/labeled/`）：`detect/annotations.json`（COCO 实例分割+检测）、
-`semantic/`（语义 PNG）、`depth/`（16-bit 深度）、三个 `*_viz/` 可视化目录。
+### 2.2 无 GPU 冒烟验证（mock 引擎）
 
-室内/室外深度模型切换：`run.yaml` 中 `depth.model` 改为
-`da3-metric-L`（默认深度引擎，米制）或 `da2-metric-indoor-L` / `da2-metric-outdoor-L`。
+```bash
+assistlabel init --dir demo --engine mock
+# 放几张图进 demo/data/raw，或用任意 jpg 试跑：
+assistlabel run -c demo/run.yaml
+assistlabel validate -c demo/run.yaml
+```
+
+深度模型切换：`run.yaml` 中 `depth.model` 改为 `da3-metric-L`（默认，米制室内外通用）、
+`da3-mono-L`（相对深度）或 `da2-metric-indoor-L` / `da2-metric-outdoor-L`。
 全部注册模型见 `assistlabel models list`（带中文说明）。
 
 ---
 
-## 3. 大规模数据集实战手册
+## 3. 大规模作业与可靠性
 
-### 3.1 模型权重下载到哪里
-
-| 来源 | 默认缓存位置 | 环境变量改位置 |
-|---|---|---|
-| ModelScope（默认优先） | `%USERPROFILE%\.cache\modelscope` | `MODELSCOPE_CACHE` |
-| HuggingFace（兜底） | `%USERPROFILE%\.cache\huggingface\hub` | `HF_HOME` |
-
-缓存全局共享：多个数据集项目复用同一份权重，只有首次下载有成本。
-显存允许时，batch 推理的权重开销是固定的，调大 `batch_size` 几乎白赚吞吐。
-
-### 3.2 推荐作业流程（万级~十万级图像）
-
-```bash
-# 1) 试跑：先刷 200 张验证配置/类别/深度尺度是否正确（廉价试错）
-assistlabel run -c run.yaml --limit 200
-assistlabel validate -c run.yaml          # 检查类别分布、置信度、深度值域是否合理
-
-# 2) 全量：Ctrl+C 随时中断，重跑自动跳过已完成图像
-assistlabel run -c run.yaml
-
-# 3) 完整性校验：断电/杀进程后，找出"manifest 标了 done 但文件损坏"的图
-assistlabel verify -c run.yaml --repair   # 重置坏条目，然后重跑补齐
-assistlabel run -c run.yaml               # 只重做坏的那几张
-
-# 4) 人工复核 + 导出
-assistlabel validate -c run.yaml --sample 100   # 低置信度分层复核清单
-assistlabel export -c run.yaml --format coco --split 0.9
-```
-
-可靠性机制一览：
+### 3.1 可靠性机制
 
 - **断点续跑**：`manifest.jsonl` 每批次原子落盘（tmp+rename），中断只损失最近几秒进度；
 - **坏图隔离**：单张解码失败/推理 OOM 只标记该图 failed，不阻塞批次；resume 会自动重试 failed 图；
 - **撕裂写检测**：`verify` 重读每个 "done" 产物的 PNG 头/uint16 类型/有效像素/JSON 完整性；
 - **manifest 防爆**：全量重写按时间节流（5s），百万图规模也不会因存进度拖慢作业。
 
-### 3.3 性能调优（run.yaml `depth:` 段）
+### 3.2 性能调优（run.yaml `depth:` 段）
 
 深度阶段是三级流水线：**预取解码线程 → GPU 批量推理 → 写盘线程池**，
 三段与下一批次重叠执行。调优顺序：
@@ -177,8 +132,7 @@ assistlabel export -c run.yaml --format coco --split 0.9
 | `half` | true | fp16 推理，保持开启 |
 | `prefetch` | 4 | 磁盘慢（机械盘/网络盘）时调大，解码彻底不挡 GPU |
 | `write_workers` | 2 | NVMe 可 2-4；写入大 16-bit PNG 的收益明显 |
-| `save_color: false` | true | 不需要人眼抽检时关掉，省 1/3 写盘量 |
-| `save_npz` | false | 保持关闭，除非下游需要全精度浮点 |
+| `viz: false` | true | 不需要深度伪彩抽检时关掉 |
 
 其他已在引擎内启用的优化：cuDNN benchmark（固定输入尺寸自动选最快卷积核）、
 TF32（Ampere+ 显卡免费加速）、横竖图分桶批处理（避免 padding 浪费）、
@@ -187,19 +141,21 @@ TF32（Ampere+ 显卡免费加速）、横竖图分桶批处理（避免 padding
 SAM3 检测阶段为逐图多提示模型（图像编码一次复用全部类别提示），
 耗时主要由模型决定；`detect.conf_thres` 调高可减少无效目标的写盘量。
 
+---
+
 ## 4. 输出说明
 
 ```
 out_dir/
 ├── manifest.jsonl      # 每图一行：路径、任务状态、耗时（断点续跑 + 溯源依据）
 ├── detect/
-│   └── annotations.json  # COCO：RLE 实例掩码 + 框 + score + 每目标深度统计
+│   └── annotations.json  # 标准 COCO：RLE 实例掩码 + bbox + score
 ├── semantic/
 │   ├── classes.txt     # 像素值 -> 类别名（0=background）
 │   └── xxx.png         # 单通道 uint8 语义掩码（像素值=类别索引）
 ├── depth/
 │   └── xxx.png         # 16-bit PNG，uint16 毫米，depth_m = pixel/1000，无效=0
-├── detect_viz/         # 检测叠加图（掩码半透明 + 框 + 类别/分数/深度）
+├── detect_viz/         # 检测叠加图（实例掩码半透明 + 框 + 类别/分数）
 ├── semantic_viz/       # 语义掩码彩色预览
 ├── depth_viz/          # 深度 turbo 伪彩
 ├── report.html         # validate 产物：类别分布、置信度直方图、深度有效率
@@ -208,9 +164,9 @@ out_dir/
 （按需导出：`assistlabel export --format yolo` 生成 ultralytics 训练布局）
 ```
 
-标注即标准 COCO：`detect/annotations.json` 的每条 annotation 携带 RLE
-实例掩码（像素级）、bbox 与 score，符合标准 COCO 字段规范，ultralytics
-官方 `convert_coco` 工具或 pycocotools 均可直接读取。
+`detect/annotations.json` 为标准 COCO 字段（RLE 实例掩码 + bbox + score），
+ultralytics 官方 `convert_coco` 工具或 pycocotools 均可直接读取；
+`semantic/` 与 `depth/` 为像素级对齐的语义/深度真值。
 
 ---
 
@@ -263,13 +219,12 @@ assistlabel status -c run.yaml [--tasks depth,detect]
 assistlabel export -c run.yaml --format yolo [--split 0.75]
 ```
 
-detect 任务原生产出就是 COCO（`detect/annotations.json`），`semantic/` 同理，
-两者无需导出。`yolo` 从 COCO 派生 ultralytics 训练布局
+从 `detect/annotations.json` 派生 ultralytics 训练布局
 （`images/ labels/ train/val + data.yaml`）。
 
 | 选项 | 说明 |
 |---|---|
-| `--format yolo` | 生成 ultralytics 训练布局（唯一需要导出的派生格式） |
+| `--format yolo` | 生成 ultralytics 训练布局 |
 | `--split 0.8` | 训练集占比（<1.0 时同时生成 val） |
 
 ### 5.5 validate — QA 质检
@@ -288,7 +243,7 @@ assistlabel verify -c run.yaml [--repair]
 ```
 
 逐项检查 "done" 产物的完整性：深度 PNG 可读/uint16/有效率、语义 PNG、
-detect COCO 可解析、源图内容是否变更（stale）。`--repair` 把损坏条目
+COCO 可解析、源图内容是否变更（stale）。`--repair` 把损坏条目
 重置为待处理，随后 `run --resume` 只重做坏图。
 
 ### 5.7 models — 模型注册表
@@ -307,28 +262,6 @@ assistlabel help                  # 顶层命令列表
 assistlabel help run              # run 的用法与选项
 assistlabel help models download  # 多级子命令
 ```
-
-### 5.9 关键配置项（run.yaml）
-
-```yaml
-tasks: [depth, detect]         # 任意子集
-download:
-  source: auto                 # auto = ModelScope 优先，HF 兜底
-depth:
-  model: da3-metric-L          # 注册表 key（备选 da3-mono-L / da2-metric-*）
-  batch_size: 8                # GPU 批量；32G 显存建议 8~16，OOM 减半
-  viz: true                    # 深度伪彩预览
-detect:
-  model: sam3
-  conf_thres: 0.5              # 置信度阈值
-  nms_iou: 0.7                 # 类内 NMS
-```
-
-自定义模型：把新的 YAML 放进任意目录，设 `ASSISTLABEL_MODELS_DIR` 指向它即可
-覆盖/追加注册表（格式参照 `assistlabel/config/models/`）。
-
-自定义模型：把新的 YAML 放进任意目录，设 `ASSISTLABEL_MODELS_DIR` 指向它即可
-覆盖/追加注册表（格式参照 `assistlabel/config/models/`）。
 
 ---
 
@@ -355,23 +288,30 @@ assistlabel/
 │   └── mock.py             # 确定性 mock（无 GPU 全链路测试用）
 ├── io/
 │   ├── dataset.py    # 图像发现 / 内容哈希 / 输出路径约定
-│   ├── depth_io.py   # 16-bit PNG(mm) 读写 / 伪彩
-│   └── annotations.py# labelme 主格式 + COCO/YOLO 导出
-├── fusion/box_depth.py    # 掩码内中位深度统计（剔除无效像素）
+│   ├── depth_io.py   # 16-bit PNG(mm) 读写（Windows 中文路径安全）/ 伪彩
+│   └── annotations.py# COCO store 增删存取 + RLE 编解码 + ultralytics 导出
+├── fusion/box_depth.py    # 掩码内深度统计（剔除无效像素）
 └── viz/overlay.py         # 检测叠加 / 深度对比图
 ```
 
 新增引擎只需：继承 `BaseEngine`（load/infer/unload）+ 注册表加一条 YAML。
 
-## 7. 测试
+---
+
+## 7. 开发与测试（无需 GPU）
 
 ```bash
-.venv\Scripts\python -m pytest tests/ -q
+python -m venv .venv && .venv\Scripts\activate
+pip install -e ".[dev]"
+pytest tests/ -q   # 62 passed
 ```
 
-覆盖：几何（IoU/NMS/掩码转换 roundtrip）、标注格式（labelme/COCO/YOLO roundtrip）、
-ontology 解析与错误、深度量化 roundtrip、manifest 断点续跑、注册表、配置校验、
-以及 **mock 引擎端到端**（图像→深度+检测+融合→导出→QA 全链路）。
+测试覆盖：几何（IoU/NMS/掩码转换 roundtrip）、标注格式（COCO store、RLE、
+ultralytics 导出）、ontology 解析与错误、深度量化 roundtrip、manifest 断点续跑、
+注册表、配置校验、CLI 帮助查询，以及 **mock 引擎端到端**
+（图像→深度+检测→融合→导出→QA 全链路）。
+
+---
 
 ## 8. 许可说明
 
