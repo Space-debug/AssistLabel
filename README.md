@@ -37,9 +37,9 @@ pip install --no-deps "depth-anything-3 @ git+https://github.com/ByteDance-Seed/
 #    （DA3 实际运行依赖已收录在 requirements.txt：einops/omegaconf/moviepy<2/trimesh/open3d 等）
 
 # 4) 环境体检 + 预下载权重（ModelScope 直连）
-python -m assistlabel.cli models check
-python -m assistlabel.cli models download sam3             # SAM3 HF 格式 ~3.4GB（默认检测引擎）
-python -m assistlabel.cli models download da3-metric-L        # DA3 米制深度 ~1.3GB（默认深度引擎）
+assistlabel models check
+assistlabel models download sam3           # SAM3 HF 格式 ~3.4GB（默认检测引擎）
+assistlabel models download da3-metric-L   # DA3 米制深度 ~1.3GB（默认深度引擎）
 ```
 
 > **SAM3 加载路径**：transformers ≥5 已原生集成 SAM3（`Sam3Model`/`Sam3Processor`），
@@ -91,10 +91,10 @@ assistlabel run -c demo/run.yaml
 assistlabel validate -c demo/run.yaml
 ```
 
-### 2.2 真实标注（三步）
+### 2.2 真实标注完整工作流
 
 ```bash
-# 1) 生成配置（默认注册真实模型）
+# 1) 生成配置（默认 da3-metric-L 深度 + sam3 检测）
 assistlabel init --dir mydata
 
 # 2) 编辑 mydata/ontology.yaml：数据集类别 -> SAM3 提示词
@@ -102,13 +102,29 @@ assistlabel init --dir mydata
 #      car:        {prompt: "car"}
 #      pedestrian: {prompt: "pedestrian walking on the road"}
 
-# 3) 跑流水线（depth、detect 串行共享 GPU；可随时 Ctrl+C，--resume 续跑）
+# 3) 试跑 20 张：先确认检出/深度合理，再放量（廉价试错）
+assistlabel run -c mydata/run.yaml --limit 20
+#    打开 mydata/labeled/detect_viz\ 和 semantic_viz\ 人工核对
+
+# 4) 全量：Ctrl+C 随时中断，重跑自动跳过已完成图像
 assistlabel run -c mydata/run.yaml
+
+# 5) 校验 + 质检
+assistlabel verify -c mydata/run.yaml --repair    # 完整性校验（--repair 重置坏条目）
+assistlabel validate -c mydata/run.yaml --sample 50   # QA 报告 + 低置信度复核清单
+
+# 6) 导出训练格式
+assistlabel export -c mydata/run.yaml --format coco            # COCO（实例分割+检测）
+assistlabel export -c mydata/run.yaml --format semantic --viz  # 语义分割 PNG + 彩色预览
+assistlabel export -c mydata/run.yaml --format yolo --split 0.8  # ultralytics 布局
 ```
+
+标注结果一览（`mydata/labeled/`）：`detect/annotations.json`（COCO 实例分割+检测）、
+`semantic/`（语义 PNG）、`depth/`（16-bit 深度）、三个 `*_viz/` 可视化目录。
 
 室内/室外深度模型切换：`run.yaml` 中 `depth.model` 改为
 `da3-metric-L`（默认深度引擎，米制）或 `da2-metric-indoor-L` / `da2-metric-outdoor-L`。
-全部注册模型见 `assistlabel models list`。
+全部注册模型见 `assistlabel models list`（带中文说明）。
 
 ---
 
