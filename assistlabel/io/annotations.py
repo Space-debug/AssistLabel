@@ -91,36 +91,30 @@ def coco_next_annotation_id(coco: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
-# RLE helpers (COCO uncompressed RLE, 纯标准库编解码)
+# RLE helpers (COCO 压缩 RLE，pycocotools 标准格式)
 # ---------------------------------------------------------------------------
 def rle_encode(mask: np.ndarray) -> dict:
-    """bool (H, W) mask -> COCO uncompressed RLE: {"size": [h, w], "counts": [int]}.
+    """bool (H, W) mask -> COCO compressed RLE via pycocotools.
 
-    Column-major runs starting with a background run (pycocotools convention);
-    plain JSON-serializable ints, no extra dependency.
+    Returns {"size": [h, w], "counts": str} — counts 为 LEB128 紧凑字符串，
+    JSON 体积远小于未压缩的 int 列表，是标准 COCO 分割格式。
     """
-    mask = np.asarray(mask) > 0
-    h, w = mask.shape
-    flat = mask.flatten(order="F").astype(np.uint8)
-    changes = np.flatnonzero(np.diff(flat)) + 1
-    boundaries = np.concatenate([[0], changes, [flat.size]])
-    counts = np.diff(boundaries).tolist()
-    if flat.size and flat[0] == 1:
-        counts = [0] + counts
-    return {"size": [int(h), int(w)], "counts": [int(c) for c in counts]}
+    from pycocotools import mask as _mask
+
+    arr = np.asfortranarray(np.asarray(mask) > 0).astype(np.uint8)
+    rle = _mask.encode(arr)
+    rle["counts"] = rle["counts"].decode("latin-1")  # bytes -> str for JSON
+    return {"size": list(rle["size"]), "counts": rle["counts"]}
 
 
 def rle_decode(rle: dict) -> np.ndarray:
-    """COCO uncompressed RLE -> bool (H, W) mask."""
-    h, w = rle["size"]
-    flat = np.zeros(h * w, dtype=np.uint8)
-    pos = 0
-    val = 0
-    for c in rle["counts"]:
-        flat[pos : pos + int(c)] = val
-        pos += int(c)
-        val = 1 - val
-    return flat.reshape((w, h)).T.astype(bool)
+    """COCO RLE (compressed str counts or uncompressed int list) -> bool (H, W)."""
+    from pycocotools import mask as _mask
+
+    rle = dict(rle)  # shallow copy, 不修改调用方
+    if isinstance(rle["counts"], str):
+        rle["counts"] = rle["counts"].encode("latin-1")
+    return _mask.decode(rle).astype(bool)
 
 
 # ---------------------------------------------------------------------------
