@@ -14,6 +14,7 @@ __all__ = [
     "box_iou",
     "nms_boxes",
     "mask_to_polygons",
+    "mask_to_ultralytics_polygons",
     "mask_to_coco_segmentation",
     "polygons_to_mask",
     "polygon_area",
@@ -113,26 +114,38 @@ def mask_to_polygons(
     return polygons
 
 
-def mask_to_coco_segmentation(
-    mask: np.ndarray,
-    epsilon_ratio: float = 0.002,
-    max_points: int = 500,
-) -> tuple[list[list[float]], float]:
+def mask_to_ultralytics_polygons(mask: np.ndarray) -> list[np.ndarray]:
+    """Extract polygons matching ultralytics' mask->polygon precision exactly.
+
+    Uses ``cv2.findContours`` with ``CHAIN_APPROX_SIMPLE`` — the identical
+    call ultralytics' ``convert_segment_masks_to_yolo_masks`` makes. No
+    Douglas-Peucker simplification or component filtering.
+    """
+    contours, _ = cv2.findContours(
+        (np.asarray(mask) > 0).astype(np.uint8),
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    return [c.reshape(-1, 2).astype(float) for c in contours if len(c) >= 3]
+
+
+def mask_to_coco_segmentation(mask: np.ndarray) -> tuple[list[list[float]], float]:
     """bool (H, W) mask -> COCO polygon segmentation + total area.
 
+    Contour extraction matches ultralytics' mask->polygon converter exactly
+    (same findContours call, no simplification), so a COCO polygon produced
+    here survives ultralytics' ``convert_coco`` round-trip bit-for-bit.
+
     Returns ``(segmentation, area)`` where ``segmentation`` is a list of flat
-    coordinate lists ``[[x1,y1,...,xn,yn], ...]`` (ultralytics/COCO standard)
-    and ``area`` is the sum of individual polygon areas (shoelace).
+    coordinate lists ``[[x1,y1,...,xn,yn], ...]`` and ``area`` is the sum of
+    individual polygon areas (shoelace).
     """
-    contours = mask_to_polygons(mask, epsilon_ratio=epsilon_ratio, max_points=max_points)
-    segmentation: list[list[float]] = []
+    polys = mask_to_ultralytics_polygons(mask)
+    segmentation = []
     total_area = 0.0
-    for contour in contours:
-        if len(contour) < 3:
-            continue
-        pts = contour.reshape(-1, 2).astype(float)
-        segmentation.append([round(float(c), 2) for pt in pts for c in pt])
-        x, y = pts[:, 0], pts[:, 1]
+    for poly in polys:
+        segmentation.append([round(float(c), 2) for pt in poly for c in pt])
+        x, y = poly[:, 0], poly[:, 1]
         total_area += abs(0.5 * (np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))))
     return segmentation, total_area
 
