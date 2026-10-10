@@ -536,6 +536,14 @@ def _run_detect_phase(
         {"id": i + 1, "name": name, "supercategory": ""}
         for i, name in enumerate(cfg.detect.classes)
     ]
+
+    # 写入 classes.txt（类别索引 → 类别名，0=background）
+    classes_txt = Path(cfg.dataset.out_dir) / "classes.txt"
+    classes_txt.parent.mkdir(parents=True, exist_ok=True)
+    classes_txt.write_text(
+        "\n".join(["background"] + [name for name, _ in cfg.detect.classes.items()]) + "\n",
+        encoding="utf-8",
+    )
     infer = make_detect_infer(cfg, engine, prompts_by_class)
     write = make_detect_writer(cfg, prompts_by_class, class_ids)
     prompt_batch = max(1, int(getattr(engine, "prompt_batch", 4)))
