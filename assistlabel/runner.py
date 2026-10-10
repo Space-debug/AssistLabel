@@ -356,9 +356,22 @@ def build_viz(
             rgb = _read_image_rgb(src)
             dets: list[Detection] = []
             for ann in anns_by_img.get(im["id"], []):
-                cat = cats.get(ann["category_id"], "?")
-                mask = rle_decode(ann["segmentation"])
+                seg = ann["segmentation"]
+                if isinstance(seg, dict):
+                    mask = rle_decode(seg)
+                elif isinstance(seg, list) and seg:
+                    # polygon format -> rasterize
+                    import cv2 as _cv2
+
+                    m = np.zeros((im["height"], im["width"]), dtype=np.uint8)
+                    for poly in seg:
+                        pts = np.asarray(poly, dtype=np.int32).reshape(-1, 2)
+                        _cv2.fillPoly(m, [pts], 1)
+                    mask = m.astype(bool)
+                else:
+                    continue
                 bx = ann.get("bbox", [0, 0, 0, 0])
+                cat = cats.get(ann["category_id"], "?")
                 dets.append(Detection(
                     label=cat, score=float(ann.get("score", 1.0)),
                     box=(float(bx[0]), float(bx[1]), float(bx[0] + bx[2]), float(bx[1] + bx[3])),
@@ -420,12 +433,15 @@ def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
                 continue
             canvas[det.mask] = cid
             ys, xs = np.nonzero(det.mask)
+            from .core.geometry import mask_to_coco_segmentation
+
+            segmentation, poly_area = mask_to_coco_segmentation(det.mask)
             anns.append({
                 "category_id": cid,
-                "segmentation": rle_encode(det.mask),
+                "segmentation": segmentation,
                 "bbox": [float(xs.min()), float(ys.min()),
                          float(xs.max() - xs.min() + 1), float(ys.max() - ys.min() + 1)],
-                "area": int(det.mask.sum()),
+                "area": round(poly_area, 1),
                 "iscrowd": 0,
                 "score": round(float(det.score), 4),
             })

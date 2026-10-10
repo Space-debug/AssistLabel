@@ -14,6 +14,7 @@ __all__ = [
     "box_iou",
     "nms_boxes",
     "mask_to_polygons",
+    "mask_to_coco_segmentation",
     "polygons_to_mask",
     "polygon_area",
 ]
@@ -110,6 +111,30 @@ def mask_to_polygons(
         if poly is not None and len(poly) >= 3:
             polygons.append(poly)
     return polygons
+
+
+def mask_to_coco_segmentation(
+    mask: np.ndarray,
+    epsilon_ratio: float = 0.002,
+    max_points: int = 500,
+) -> tuple[list[list[float]], float]:
+    """bool (H, W) mask -> COCO polygon segmentation + total area.
+
+    Returns ``(segmentation, area)`` where ``segmentation`` is a list of flat
+    coordinate lists ``[[x1,y1,...,xn,yn], ...]`` (ultralytics/COCO standard)
+    and ``area`` is the sum of individual polygon areas (shoelace).
+    """
+    contours = mask_to_polygons(mask, epsilon_ratio=epsilon_ratio, max_points=max_points)
+    segmentation: list[list[float]] = []
+    total_area = 0.0
+    for contour in contours:
+        if len(contour) < 3:
+            continue
+        pts = contour.reshape(-1, 2).astype(float)
+        segmentation.append([round(float(c), 2) for pt in pts for c in pt])
+        x, y = pts[:, 0], pts[:, 1]
+        total_area += abs(0.5 * (np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))))
+    return segmentation, total_area
 
 
 def _simplify(contour: np.ndarray, epsilon_ratio: float, max_points: int) -> np.ndarray | None:

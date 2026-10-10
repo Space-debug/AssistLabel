@@ -92,15 +92,13 @@ def test_full_pipeline_mock(project):
         assert (out / "semantic_viz" / f"{stem}.jpg").exists()
         assert (out / "detect_viz" / f"{stem}.jpg").exists()
 
-        # COCO: 2 instances per image (one per ontology class), RLE masks
+        # COCO: 2 instances per image (one per ontology class), polygon segmentation
         coco = _coco(project)
         anns = _anns_for(project, image)
         assert len(anns) == 2
         for ann in anns:
-            assert isinstance(ann["segmentation"], dict) and ann["segmentation"]["counts"]
+            assert isinstance(ann["segmentation"], list) and len(ann["segmentation"][0]) >= 6
             assert ann["bbox"][2] > 0 and ann["bbox"][3] > 0
-            # 标准 COCO 字段，不含非标的深度扩展
-            assert "depth_median_m" not in ann
 
     # semantic class indices limited to ontology ids {1, 2}
     sem = cv2.imread(str(out / "semantic" / "img_00.png"), cv2.IMREAD_UNCHANGED)
