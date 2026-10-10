@@ -537,11 +537,11 @@ def _run_detect_phase(
         for i, name in enumerate(cfg.detect.classes)
     ]
 
-    # 写入 classes.txt（类别索引 → 类别名，0=background）
+    # 写入 classes.txt（类别索引 → 类别名，与 COCO category_id 一致，从 1 开始）
     classes_txt = Path(cfg.dataset.out_dir) / "classes.txt"
     classes_txt.parent.mkdir(parents=True, exist_ok=True)
     classes_txt.write_text(
-        "\n".join(["background"] + [name for name, _ in cfg.detect.classes.items()]) + "\n",
+        "\n".join(name for name, _ in cfg.detect.classes.items()) + "\n",
         encoding="utf-8",
     )
     infer = make_detect_infer(cfg, engine, prompts_by_class)
