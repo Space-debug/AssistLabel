@@ -37,8 +37,18 @@ class DetectCfg(BaseModel):
     conf_thres: float = Field(default=0.5, ge=0.0, le=1.0)
     max_objects_per_prompt: int = Field(default=50, ge=1)
     nms_iou: float = Field(default=0.7, gt=0.0, le=1.0)
+    seg_format: str = Field(
+        default="polygon", description="COCO segmentation format: polygon | rle"
+    )
     prefetch: int = Field(default=2, ge=1, description="Decoded images kept ahead of the GPU")
     write_workers: int = Field(default=2, ge=1, description="Threads writing COCO/semantic while GPU infers")
+
+    @field_validator("seg_format")
+    @classmethod
+    def _check_seg_format(cls, v: str) -> str:
+        if v not in ("polygon", "rle"):
+            raise ValueError("detect.seg_format must be 'polygon' or 'rle'")
+        return v
 
 
 class DownloadCfg(BaseModel):

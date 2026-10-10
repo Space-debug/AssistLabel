@@ -111,7 +111,7 @@ detect:
   ontology: "ontology.yaml"      # 类别定义
   conf_thres: 0.5                # 置信度阈值
   nms_iou: 0.7                   # 类内 NMS
-  viz: true                      # 生成 detect_viz 叠加图
+  seg_format: polygon            # polygon(默认, ultralytics 兼容) | rle(压缩, 体积小)
 ```
 
 ### 2.3 输出说明

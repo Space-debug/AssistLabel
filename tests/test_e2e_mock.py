@@ -132,6 +132,29 @@ def test_redo_detect_refreshes(project):
     assert len(coco["annotations"]) == 8
 
 
+def test_rle_seg_format(project):
+    """seg_format=rle 时 COCO segmentation 为压缩 RLE dict。"""
+    import copy
+
+    cfg_copy = project.model_copy(deep=True)
+    cfg_copy.detect.seg_format = "rle"
+    report = run_pipeline(cfg_copy, ["depth", "detect"], resume=False)
+    assert report.processed == 8 and report.failed == 0
+
+    coco = _coco(cfg_copy)
+    for ann in coco["annotations"]:
+        assert isinstance(ann["segmentation"], dict)
+        assert "size" in ann["segmentation"] and "counts" in ann["segmentation"]
+
+
+def test_polygon_seg_format(project):
+    """seg_format=polygon（默认）时 COCO segmentation 为 polygon 列表。"""
+    report = run_pipeline(project, ["depth", "detect"], resume=False)
+    coco = _coco(project)
+    for ann in coco["annotations"]:
+        assert isinstance(ann["segmentation"], list)
+
+
 def test_export_and_qa(project):
     run_pipeline(project, ["depth", "detect"], resume=False)
     out = project.dataset.out_dir

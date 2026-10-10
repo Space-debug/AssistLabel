@@ -59,6 +59,7 @@ detect:
   conf_thres: 0.5
   max_objects_per_prompt: 50
   nms_iou: 0.7
+  seg_format: polygon           # polygon(默认, ultralytics 兼容) | rle(压缩, 体积小)
   prefetch: 2                  # decoded images kept ready ahead of the GPU
   write_workers: 2             # COCO/semantic write threads overlapping inference
 

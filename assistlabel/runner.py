@@ -433,15 +433,25 @@ def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
                 continue
             canvas[det.mask] = cid
             ys, xs = np.nonzero(det.mask)
-            from .core.geometry import mask_to_coco_segmentation
+            bbox = [float(xs.min()), float(ys.min()),
+                    float(xs.max() - xs.min() + 1), float(ys.max() - ys.min() + 1)]
 
-            segmentation, poly_area = mask_to_coco_segmentation(det.mask)
+            if cfg.detect.seg_format == "rle":
+                from .io.annotations import rle_encode
+
+                segmentation = rle_encode(det.mask)
+                area: float = int(det.mask.sum())
+            else:
+                from .core.geometry import mask_to_coco_segmentation
+
+                segmentation, poly_area = mask_to_coco_segmentation(det.mask)
+                area = round(poly_area, 1)
+
             anns.append({
                 "category_id": cid,
                 "segmentation": segmentation,
-                "bbox": [float(xs.min()), float(ys.min()),
-                         float(xs.max() - xs.min() + 1), float(ys.max() - ys.min() + 1)],
-                "area": round(poly_area, 1),
+                "bbox": bbox,
+                "area": area,
                 "iscrowd": 0,
                 "score": round(float(det.score), 4),
             })
