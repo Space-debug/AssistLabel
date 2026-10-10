@@ -65,8 +65,8 @@ assistlabel init --dir mydata
 
 # 2) 编辑 mydata/run.yaml 的 detect.classes：数据集类别 -> SAM3 提示词
 #    classes:
-#      car: {prompt: "car"}
-#      pedestrian: {prompt: "pedestrian walking on the road"}
+#      car: "car"
+#      pedestrian: "pedestrian walking on the road"
 
 # 3) 试跑 20 张：先确认检出/深度合理，再放量（廉价试错）
 assistlabel run -c mydata/run.yaml --limit 20
@@ -90,31 +90,37 @@ assistlabel export -c mydata/run.yaml --format yolo --split 0.8  # ultralytics �
 
 ```yaml
 dataset:
-  image_dir: "data/raw"          # 源图像目录（递归扫描）
-  out_dir: "labeled"             # 输出根目录
-  patterns: ["*.jpg", "*.png"]   # 图像文件匹配模式
+  image_dir: "data/raw"                       # 源图像目录（递归扫描）
+  out_dir: "data/labeled"                     # 输出根目录
+  patterns: ["*.jpg", "*.jpeg", "*.png", "*.bmp"]  # 图像文件匹配模式
 
-tasks: [depth, detect]           # 要执行的任务（任意子集）
+tasks: [depth, detect]          # 要执行的任务（任意子集: depth / detect）
 
 download:
-  source: auto                   # auto = ModelScope 优先, HF 兜底
+  source: auto                   # auto = ModelScope 优先, HF 兜底; 或 modelscope / huggingface
 
 depth:
   model: "da3-metric-L"          # 深度引擎（见 models list）
   device: cuda
   half: true                     # fp16 推理
-  batch_size: 8                  # GPU 批量；32G 显存建议 8~16，OOM 减半
-  prefetch: 4                    # 预取解码线程数
-  write_workers: 2               # 写盘线程池
+  batch_size: 4                  # GPU 批量；显存充足可调到 8~16，OOM 则减小
+  prefetch: 4                    # 解码预取队列深度（GPU 前保持的就绪图像数）
+  write_workers: 2               # PNG/元数据写盘线程（与推理重叠）
+  png_compression: 3             # PNG 压缩级别：0 最快 / 9 最小
 
 detect:
   model: "sam3"                  # 检测引擎
+  device: cuda
+  half: false                    # fp16 推理（SAM3 默认 bf16 autocast，无需开启）
   conf_thres: 0.5                # 置信度阈值
+  max_objects_per_prompt: 50     # 每个提示词最多保留的检测数
   nms_iou: 0.7                   # 类内 NMS
   seg_format: polygon            # polygon(默认, ultralytics 兼容) | rle(压缩, 体积小)
+  prefetch: 2                    # 解码预取队列深度
+  write_workers: 2               # COCO/semantic 写盘线程（与推理重叠）
   classes:                       # 类别名 -> SAM3 提示词（按此顺序分配 category_id）
-    car: {prompt: "car"}
-    pedestrian: {prompt: "pedestrian walking on the road"}
+    car: "car"
+    pedestrian: "pedestrian walking on the road"
 ```
 
 ### 2.3 输出说明
@@ -300,7 +306,7 @@ assistlabel/
 ```bash
 python -m venv .venv && .venv\Scripts\activate
 pip install -e ".[dev]"
-pytest tests/ -q   # 70 passed
+pytest tests/ -q   # 73 passed
 ```
 
 测试覆盖：几何（IoU/NMS/掩码转换 roundtrip）、标注格式（COCO store、RLE、
