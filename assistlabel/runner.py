@@ -311,23 +311,43 @@ def build_viz(
             _write_image_jpg(depth_viz / (p.stem + ".jpg"), pseudocolor(d))
             counts["depth"] += 1
 
-    # semantic: semantic/*.png -> semantic_viz/*.jpg（固定调色板按类别上色）
+    # semantic: semantic_viz/*.jpg（从 COCO RLE 解码按类别上色）
     if "semantic" in tasks:
-        sem_dir = out_dir / "semantic"
-        sem_viz_dir = out_dir / "semantic_viz"
-        sem_viz_dir.mkdir(parents=True, exist_ok=True)
+        from .io.annotations import coco_load, rle_decode
+
+        coco_path = out_dir / "detect" / "annotations.json"
+        if not coco_path.exists():
+            console.print(f"[yellow]semantic: 跳过（未找到 {coco_path}），先运行 detect 任务[/]")
+            return counts
+        coco = coco_load(coco_path)
+        cats = {c["id"]: c["name"] for c in coco.get("categories", [])}
         palette = np.array([
             [0, 0, 0], [180, 119, 31], [255, 127, 14], [44, 160, 44],
             [214, 39, 40], [148, 103, 189], [140, 86, 75], [227, 119, 194],
             [127, 127, 127], [31, 119, 180], [255, 127, 14], [44, 160, 44],
             [214, 39, 40], [148, 103, 189], [140, 86, 75], [227, 119, 194],
-        ], dtype=np.uint8)  # 与 semantic/classes.txt 的索引一一对应（0=背景黑）
-        for p in sorted(sem_dir.glob("*.png")):
-            m = cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
-            if m is None:
+        ], dtype=np.uint8)  # 索引 = category_id（0=背景黑）
+        sem_viz_dir = out_dir / "semantic_viz"
+        sem_viz_dir.mkdir(parents=True, exist_ok=True)
+        anns_by_img: dict[int, list[dict]] = {}
+        for ann in coco.get("annotations", []):
+            anns_by_img.setdefault(ann["image_id"], []).append(ann)
+
+        for im in coco.get("images", []):
+            h, w = im.get("height", 0), im.get("width", 0)
+            if h <= 0 or w <= 0:
                 continue
-            color = palette[np.clip(m, 0, len(palette) - 1)]
-            _write_image_jpg(sem_viz_dir / (p.stem + ".jpg"), color)
+            canvas = np.zeros((h, w), dtype=np.uint8)
+            for ann in anns_by_img.get(im["id"], []):
+                seg = ann["segmentation"]
+                if isinstance(seg, dict):
+                    mask = rle_decode(seg)
+                else:
+                    continue
+                canvas[mask] = ann.get("category_id", 0)
+            color = palette[np.clip(canvas, 0, len(palette) - 1)]
+            stem = Path(im["file_name"]).stem
+            _write_image_jpg(sem_viz_dir / (stem + ".jpg"), color)
             counts["semantic"] += 1
 
     # detect: COCO anns -> detect_viz/*.jpg（在源图上叠加 RLE 实例掩码 + 框 + 标签）
@@ -458,7 +478,6 @@ def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
 
         from .io.depth_io import imwrite_safe
 
-        imwrite_safe(paths["semantic_png"], canvas)
         return {
             "image": {"file_name": _relative_name(image_path, cfg.dataset.image_dir),
                       "width": w, "height": h},

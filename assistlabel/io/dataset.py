@@ -77,9 +77,8 @@ def out_paths(out_dir: str | Path, image_path: str | Path, image_dir: str | Path
             pass  # image not under image_dir: fall back to plain stem
     return {
         "manifest": out_dir / "manifest.jsonl",
-        "detect_json": out_dir / "detect" / "annotations.json",
-        "semantic_png": out_dir / "semantic" / f"{stem}.png",
-        "semantic_classes": out_dir / "semantic" / "classes.txt",
+        "detect_json": out_dir / "annotations.json",
+        "classes_txt": out_dir / "classes.txt",
         "semantic_viz": out_dir / "semantic_viz" / f"{stem}.jpg",
         "depth_png": out_dir / "depth" / f"{stem}.png",
         "depth_viz": out_dir / "depth_viz" / f"{stem}.jpg",

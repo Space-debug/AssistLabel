@@ -73,14 +73,14 @@ def test_full_pipeline_mock(project):
     out = project.dataset.out_dir
     images = scan_images(project.dataset.image_dir)
 
-    # run 只产标注（深度/语义 PNG + COCO），不产任何可视化
+    # run 只产标注（深度 PNG + COCO），不产任何可视化
     for image in images:
         stem = image.stem
         depth = read_depth_png(out / "depth" / f"{stem}.png")
         assert depth.shape == (120, 160) and depth.max() > 0
-        assert (out / "semantic" / f"{stem}.png").exists()
         assert not (out / "depth_viz" / f"{stem}.jpg").exists()
         assert not (out / "detect_viz" / f"{stem}.jpg").exists()
+        assert not (out / "semantic_viz" / f"{stem}.jpg").exists()
 
     # viz 按需生成：覆盖 depth/detect/semantic 三类
     counts = build_viz(project, ["depth", "detect", "semantic"])
@@ -99,10 +99,6 @@ def test_full_pipeline_mock(project):
         for ann in anns:
             assert isinstance(ann["segmentation"], list) and len(ann["segmentation"][0]) >= 6
             assert ann["bbox"][2] > 0 and ann["bbox"][3] > 0
-
-    # semantic class indices limited to ontology ids {1, 2}
-    sem = cv2.imread(str(out / "semantic" / "img_00.png"), cv2.IMREAD_UNCHANGED)
-    assert set(np.unique(sem)) <= {0, 1, 2}
 
     # manifest tracks done state
     lines = (out / "manifest.jsonl").read_text(encoding="utf-8").strip().splitlines()

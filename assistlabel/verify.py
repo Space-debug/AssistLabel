@@ -69,14 +69,15 @@ def _verify_depth(cfg: RunConfig, key: str, rec: dict) -> list[Issue]:
 
 def _verify_detect(cfg: RunConfig, key: str) -> list[Issue]:
     paths = out_paths(cfg.dataset.out_dir, key, cfg.dataset.image_dir)
-    sem = paths["semantic_png"]
-    if not sem.exists():
-        return [Issue(key, "detect", "missing", f"{sem.name} not found")]
-    raw = imread_unchanged(sem)
-    if raw is None:
-        return [Issue(key, "detect", "corrupt", f"{sem.name} is not readable")]
-    if raw.dtype != np.uint8:
-        return [Issue(key, "detect", "corrupt", f"expected uint8, got {raw.dtype}")]
+    cj = paths["detect_json"]
+    if not cj.exists():
+        return [Issue(key, "detect", "missing", f"{cj.name} not found")]
+    try:
+        coco = json.loads(cj.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return [Issue(key, "detect", "corrupt", f"COCO unreadable: {exc}")]
+    if not isinstance(coco.get("annotations"), list) or not coco.get("categories"):
+        return [Issue(key, "detect", "corrupt", "COCO missing annotations or categories")]
     return []
 
 
