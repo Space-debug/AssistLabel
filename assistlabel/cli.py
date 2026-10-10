@@ -266,7 +266,7 @@ def export(
         err_console.print(f"Unknown format: {fmt}（semantic/depth 由 run 原生产出，无需导出）")
         raise typer.Exit(code=2)
 
-    coco_json = Path(cfg.dataset.out_dir) / "detect" / "annotations.json"
+    coco_json = Path(cfg.dataset.out_dir) / "annotations.json"
     if not coco_json.exists():
         err_console.print(f"未找到 {coco_json}，请先运行 detect 任务")
         raise typer.Exit(code=1)

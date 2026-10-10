@@ -18,7 +18,7 @@ SCORE_BUCKETS = [0.5, 0.6, 0.7, 0.8, 0.9, 1.01]
 
 
 def _coco_path(out_dir: Path) -> Path:
-    return Path(out_dir) / "detect" / "annotations.json"
+    return Path(out_dir) / "annotations.json"
 
 
 def collect_stats(out_dir: str | Path) -> dict:

@@ -55,7 +55,7 @@ def project(tmp_path):
 
 
 def _coco(project):
-    path = project.dataset.out_dir / "detect" / "annotations.json"
+    path = project.dataset.out_dir / "annotations.json"
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -156,11 +156,11 @@ def test_export_and_qa(project):
     out = project.dataset.out_dir
 
     from assistlabel.io.annotations import coco_load
-    coco = coco_load(out / "detect" / "annotations.json")
+    coco = coco_load(out / "annotations.json")
 
     # ultralytics export derives from the native COCO store
     result = export_ultralytics(
-        out / "detect" / "annotations.json",
+        out / "annotations.json",
         out / "ultralytics",
         image_dir=project.dataset.image_dir,
         split=0.75,

@@ -4,7 +4,7 @@ Phases run serially (depth -> detect) so one GPU serves all engines.
 
 Outputs (per the user-facing layout):
 
-- ``detect/annotations.json``  COCO instance seg+det (RLE masks, bbox, score,
+- ``annotations.json``  COCO instance seg+det (RLE masks, bbox, score,
   per-object depth stats)
 - ``semantic/<stem>.png``      class-index masks (0=background, i=ontology order)
 - ``depth/<stem>.png``         16-bit millimeters (KITTI convention)
@@ -315,7 +315,7 @@ def build_viz(
     if "semantic" in tasks:
         from .io.annotations import coco_load, rle_decode
 
-        coco_path = out_dir / "detect" / "annotations.json"
+        coco_path = out_dir / "annotations.json"
         if not coco_path.exists():
             console.print(f"[yellow]semantic: 跳过（未找到 {coco_path}），先运行 detect 任务[/]")
             return counts
@@ -354,7 +354,7 @@ def build_viz(
     if "detect" in tasks:
         from .io.annotations import coco_load, rle_decode
 
-        coco_path = out_dir / "detect" / "annotations.json"
+        coco_path = out_dir / "annotations.json"
         if not coco_path.exists():
             console.print(f"[yellow]detect: 跳过（未找到 {coco_path}），先运行 detect 任务[/]")
             return counts
@@ -513,7 +513,7 @@ def _run_detect_phase(
 ) -> None:
     """Pipelined detect phase: producer decode -> (image, prompt) pair
     inference -> thread pool writes semantic/viz; COCO fragments merge in the
-    main thread and are throttled-dumped to ``detect/annotations.json``."""
+    main thread and are throttled-dumped to ``annotations.json``."""
     import queue
 
     coco = coco_load(coco_path)
@@ -752,7 +752,7 @@ def run_pipeline(
                 elif task == "detect":
                     _run_detect_phase(cfg, registry, pending, manifest, report, progress, pid,
                                       ontology_hash=_ontology_hash(cfg),
-                                      coco_path=Path(cfg.dataset.out_dir) / "detect" / "annotations.json")
+                                      coco_path=Path(cfg.dataset.out_dir) / "annotations.json")
                 else:
                     raise EngineError(f"Unknown task: {task}")
                 if report.failed:
