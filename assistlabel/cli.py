@@ -61,8 +61,8 @@ detect:
   prefetch: 2                  # decoded images kept ready ahead of the GPU
   write_workers: 2             # COCO/semantic write threads overlapping inference
   classes:                       # 类别名 -> SAM3 提示词（按此顺序分配 category_id）
-    car: {prompt: "car"}
-    pedestrian: {prompt: "pedestrian walking on the road"}
+    car: "car"
+    pedestrian: "pedestrian walking on the road"
 
 """
 

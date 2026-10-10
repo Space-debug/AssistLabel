@@ -342,6 +342,13 @@ def build_viz(
                 seg = ann["segmentation"]
                 if isinstance(seg, dict):
                     mask = rle_decode(seg)
+                elif isinstance(seg, list) and seg:
+                    # polygon format -> rasterize
+                    m = np.zeros((h, w), dtype=np.uint8)
+                    for poly in seg:
+                        pts = np.asarray(poly, dtype=np.int32).reshape(-1, 2)
+                        cv2.fillPoly(m, [pts], 1)
+                    mask = m.astype(bool)
                 else:
                     continue
                 canvas[mask] = ann.get("category_id", 0)
