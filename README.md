@@ -3,7 +3,7 @@
 基于 **Depth Anything V3 + SAM3** 的批量自动标注（预标注）流水线工具。
 
 - **深度真值**：Depth Anything V3（默认）/ V2 批量刷 16-bit 深度图（毫米，KITTI 约定）
-- **检测 + 实例分割**：SAM3 文本概念提示批量生成框、RLE 实例掩码、语义标签
+- **检测 + 实例分割**：SAM3 文本概念提示批量生成框 + polygon/RLE 实例掩码
 - **语义分割**：同步产出按类别索引的单通道语义 PNG（0=背景）
 - **断点续跑**：manifest.jsonl 驱动，中断后重跑自动跳过已完成图像
 
@@ -63,27 +63,28 @@ assistlabel models download da3-metric-L   # DA3 米制深度 ~1.3GB（默认深
 # 1) 生成配置（默认 da3-metric-L 深度 + sam3 检测）
 assistlabel init --dir mydata
 
-# 2) 编辑 mydata/ontology.yaml：数据集类别 -> SAM3 提示词
+# 2) 编辑 mydata/run.yaml 的 detect.classes：数据集类别 -> SAM3 提示词
 #    classes:
-#      car:        {prompt: "car"}
+#      car: {prompt: "car"}
 #      pedestrian: {prompt: "pedestrian walking on the road"}
 
 # 3) 试跑 20 张：先确认检出/深度合理，再放量（廉价试错）
 assistlabel run -c mydata/run.yaml --limit 20
-#    打开 mydata/labeled/ 下 detect_viz\ 与 semantic_viz\ 人工核对
+#    打开 mydata/labeled/ 下 detect_viz\ 与 depth_viz\ 人工核对
 
 # 4) 全量：Ctrl+C 随时中断，重跑自动跳过已完成图像
 assistlabel run -c mydata/run.yaml
 
-# 5) 校验 + 质检
+# 5) 生成可视化（detect_viz/semantic_viz/depth_viz，人工核对用）
+assistlabel viz -c mydata/run.yaml
+
+# 6) 校验 + 质检
 assistlabel verify -c mydata/run.yaml --repair    # 完整性校验（--repair 重置坏条目）
 assistlabel validate -c mydata/run.yaml --sample 50   # QA 报告 + 低置信度复核清单
 
-# 6) 导出训练格式
+# 7) 导出训练格式
 assistlabel export -c mydata/run.yaml --format yolo --split 0.8  # ultralytics 布局
 ```
-
-
 
 ### 2.2 配置文件说明（run.yaml）
 
@@ -108,10 +109,12 @@ depth:
 
 detect:
   model: "sam3"                  # 检测引擎
-  ontology: "ontology.yaml"      # 类别定义
   conf_thres: 0.5                # 置信度阈值
   nms_iou: 0.7                   # 类内 NMS
   seg_format: polygon            # polygon(默认, ultralytics 兼容) | rle(压缩, 体积小)
+  classes:                       # 类别名 -> SAM3 提示词（按此顺序分配 category_id）
+    car: {prompt: "car"}
+    pedestrian: {prompt: "pedestrian walking on the road"}
 ```
 
 ### 2.3 输出说明
@@ -119,11 +122,8 @@ detect:
 ```
 out_dir/
 ├── manifest.jsonl      # 每图一行：路径、任务状态、耗时（断点续跑 + 溯源依据）
-├── detect/
-│   └── annotations.json  # 标准 COCO：RLE 实例掩码 + bbox + score
-├── semantic/
-│   ├── classes.txt     # 像素值 -> 类别名（0=background）
-│   └── xxx.png         # 单通道 uint8 语义掩码（像素值=类别索引）
+├── annotations.json    # 标准 COCO：polygon/RLE 实例掩码 + bbox + score
+├── classes.txt         # 类别索引 -> 类别名（0=background）
 ├── depth/
 │   └── xxx.png         # 16-bit PNG，uint16 毫米，depth_m = pixel/1000，无效=0
 ├── detect_viz/         # 检测叠加图（实例掩码半透明 + 框 + 类别/分数）
@@ -135,9 +135,9 @@ out_dir/
 （按需导出：`assistlabel export --format yolo` 生成 ultralytics 训练布局）
 ```
 
-`detect/annotations.json` 为标准 COCO 字段（RLE 实例掩码 + bbox + score），
-ultralytics 官方 `convert_coco` 工具或 pycocotools 均可直接读取；
-`semantic/` 与 `depth/` 为像素级对齐的语义/深度真值。
+`annotations.json` 为标准 COCO 格式（polygon 实例分割 + bbox），ultralytics
+官方 `convert_coco` 工具或 pycocotools 均可直接读取；`depth/` 为像素级对齐的
+深度真值。语义掩码信息已包含在 COCO 的 RLE 分割字段中，无需单独文件。
 
 ---
 
@@ -155,7 +155,7 @@ assistlabel init [--dir DIR] [--engine auto|mock]
 
 | 选项 | 说明 |
 |---|---|
-| `--dir DIR` | 项目目录（默认当前目录），自动创建 `run.yaml`、`ontology.yaml`、`data/raw/` |
+| `--dir DIR` | 项目目录（默认当前目录），自动创建 `run.yaml`（含类别定义）、`data/raw/` |
 | `--engine auto\|mock` | auto=注册表里的真实模型；mock=测试假引擎（无需 GPU，秒级验证流程） |
 
 ### 3.2 run — 批量标注流水线
@@ -170,7 +170,7 @@ assistlabel run -c run.yaml [选项]
 | `--tasks depth,detect` | 覆盖配置里的任务列表（逗号分隔） |
 | `--resume/--no-resume` | 断点续跑开关（默认开；跳过 manifest 中已完成的图） |
 | `--limit N` | 只处理前 N 张（小批量试跑） |
-| `--redo-detect` | 清除全部 detect 状态后重跑（ontology 变更后使用） |
+| `--redo-detect` | 清除全部 detect 状态后重跑（类别定义变更后使用） |
 | `--force` | 跳过磁盘剩余空间预检 |
 
 执行中可随时 Ctrl+C 中断：进度已保存，重跑自动续。
@@ -181,7 +181,7 @@ assistlabel run -c run.yaml [选项]
 assistlabel status -c run.yaml [--tasks depth,detect]
 ```
 
-按任务显示 done / failed / pending 与平均耗时、ETA；若 ontology.yaml
+按任务显示 done / failed / pending 与平均耗时、ETA；若类别定义
 在标注后发生过变更，会提示用 `--redo-detect` 重刷。
 
 ### 3.4 export — 导出训练格式
@@ -190,13 +190,8 @@ assistlabel status -c run.yaml [--tasks depth,detect]
 assistlabel export -c run.yaml --format yolo [--split 0.75]
 ```
 
-从 `detect/annotations.json` 派生 ultralytics 训练布局
+从 `annotations.json` 派生 ultralytics 训练布局
 （`images/ labels/ train/val + data.yaml`）。
-
-| 选项 | 说明 |
-|---|---|
-| `--format yolo` | 生成 ultralytics 训练布局 |
-| `--split 0.8` | 训练集占比（<1.0 时同时生成 val） |
 
 ### 3.5 viz — 生成可视化
 
@@ -223,7 +218,7 @@ assistlabel validate -c run.yaml [--sample 50] [--report PATH]
 assistlabel verify -c run.yaml [--repair]
 ```
 
-逐项检查 "done" 产物的完整性：深度 PNG 可读/uint16/有效率、语义 PNG、
+逐项检查 "done" 产物的完整性：深度 PNG 可读/uint16/有效率、
 COCO 可解析、源图内容是否变更（stale）。`--repair` 把损坏条目
 重置为待处理，随后 `run --resume` 只重做坏图。
 
@@ -246,20 +241,41 @@ assistlabel help models download  # 多级子命令
 
 ---
 
-## 4. 架构
+## 4. 性能调优（run.yaml `depth:` 段）
+
+深度阶段是三级流水线：**预取解码线程 → GPU 批量推理 → 写盘线程池**，
+三段与下一批次重叠执行。调优顺序：
+
+| 参数 | 默认 | 建议 |
+|---|---|---|
+| `batch_size` | 4 | 显存允尽量调大（8~16）；OOM 则减半。对吞吐影响最大 |
+| `half` | true | fp16 推理，保持开启 |
+| `prefetch` | 4 | 磁盘慢（机械盘/网络盘）时调大，解码彻底不挡 GPU |
+| `write_workers` | 2 | NVMe 可 2-4；写入大 16-bit PNG 的收益明显 |
+
+其他已在引擎内启用的优化：cuDNN benchmark（固定输入尺寸自动选最快卷积核）、
+TF32（Ampere+ 显卡免费加速）、横竖图分桶批处理（避免 padding 浪费）、
+批量推理失败自动降级为逐图（防 OOM 连坐）。
+
+SAM3 检测阶段为逐图多提示模型（图像编码一次复用全部类别提示），
+耗时主要由模型决定；`detect.conf_thres` 调高可减少无效目标的写盘量。
+
+---
+
+## 5. 架构
 
 ```
 assistlabel/
-├── cli.py            # typer CLI（本文件第 5 节的全部命令）
+├── cli.py            # typer CLI（本文件第 3 节的全部命令）
 ├── runner.py         # 编排器：分相流水线（预取解码/批推理/异步写盘）
 ├── hub.py            # 模型权重下载源（ModelScope 优先，HF 兜底）
 ├── qa.py             # 统计报告 + 分层抽样
 ├── verify.py         # 产物完整性校验（撕裂写/源图变更检测）
 ├── core/
-│   ├── geometry.py   # IoU / NMS / mask<->polygon（纯 numpy，无 torch）
+│   ├── geometry.py   # IoU / NMS / mask<->polygon / COCO polygon segmentation
 │   ├── registry.py   # 模型注册表（X-AnyLabeling model zoo 式 YAML）
 │   ├── engine.py     # BaseEngine：懒加载 / unload 显存共享；Detection 数据类
-│   ├── ontology.py   # 类别名 <-> SAM3 提示词（autodistill 式，重复键检测）
+│   ├── ontology.py   # 类别名 <-> SAM3 提示词（兼容层，已合并到 run.yaml）
 │   ├── config.py     # pydantic 运行配置
 │   └── pipeline.py   # manifest.jsonl 断点续跑 + 单图任务执行
 ├── engines/
@@ -270,7 +286,7 @@ assistlabel/
 ├── io/
 │   ├── dataset.py    # 图像发现 / 内容哈希 / 输出路径约定
 │   ├── depth_io.py   # 16-bit PNG(mm) 读写（Windows 中文路径安全）/ 伪彩
-│   └── annotations.py# COCO store 增删存取 + RLE 编解码 + ultralytics 导出
+│   └── annotations.py# COCO store + RLE 编解码（pycocotools 压缩）+ ultralytics 导出
 ├── fusion/box_depth.py    # 掩码内深度统计（剔除无效像素）
 └── viz/overlay.py         # 检测叠加 / 深度对比图
 ```
@@ -279,7 +295,7 @@ assistlabel/
 
 ---
 
-## 5. 开发与测试（无需 GPU）
+## 6. 开发与测试（无需 GPU）
 
 ```bash
 python -m venv .venv && .venv\Scripts\activate
@@ -294,7 +310,7 @@ ultralytics 导出）、ontology 解析与错误、深度量化 roundtrip、mani
 
 ---
 
-## 6. 许可说明
+## 7. 许可说明
 
 - 本工具代码：MIT
 - SAM3 权重：Meta 自定义 SAM License（商用前请核对 LICENSE）
