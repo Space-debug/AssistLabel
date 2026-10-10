@@ -521,15 +521,13 @@ def _run_detect_phase(
     spec = registry.get(cfg.detect.model)
     engine = build_engine(spec.provider, spec.hf_id, _engine_params(spec))
     engine.load(device=cfg.detect.device, half=cfg.detect.half, source=cfg.download.source)
-    from .core.ontology import load_ontology
 
-    classes = load_ontology(cfg.detect.ontology)
-    prompts_by_class = [(c.name, c.prompt) for c in classes]
-    class_ids = {c.name: i + 1 for i, c in enumerate(classes)}  # 0 = background
+    prompts_by_class = [(name, prompt) for name, prompt in cfg.detect.classes.items()]
+    class_ids = {name: i + 1 for i, name in enumerate(cfg.detect.classes)}
     # categories 是导出的权威定义（ontology 顺序，id 从 1 开始）
     coco["categories"] = [
-        {"id": i + 1, "name": c.name, "supercategory": ""}
-        for i, c in enumerate(classes)
+        {"id": i + 1, "name": name, "supercategory": ""}
+        for i, name in enumerate(cfg.detect.classes)
     ]
     infer = make_detect_infer(cfg, engine, prompts_by_class)
     write = make_detect_writer(cfg, prompts_by_class, class_ids)
@@ -662,10 +660,7 @@ def _disk_free_bytes(path: Path) -> int:
 
 
 def ontology_mismatch_count(cfg: RunConfig, manifest: Manifest) -> int:
-    """Detect records whose labels predate an ontology.yaml change."""
-    onto = Path(cfg.detect.ontology)
-    if not onto.exists():
-        return 0
+    """Detect records whose labels predate an ontology change."""
     current = _ontology_hash(cfg)
     return sum(
         1 for rec in manifest.records.values()
@@ -675,10 +670,9 @@ def ontology_mismatch_count(cfg: RunConfig, manifest: Manifest) -> int:
 
 
 def _ontology_hash(cfg: RunConfig) -> str:
-    onto = Path(cfg.detect.ontology)
-    if not onto.exists():
-        return "n/a"
-    return hashlib.sha1(onto.read_bytes()).hexdigest()[:12]
+    import hashlib
+
+    return hashlib.sha1(repr(sorted(cfg.detect.classes.items())).encode()).hexdigest()[:12]
 
 
 def run_pipeline(

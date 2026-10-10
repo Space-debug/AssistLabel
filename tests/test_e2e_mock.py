@@ -41,10 +41,9 @@ def project(tmp_path):
                 "depth": {"model": "mock-depth", "device": "cpu"},
                 "detect": {
                     "model": "mock-detect",
-                    "ontology": "ontology.yaml",
                     "device": "cpu",
                     "conf_thres": 0.5,
-                    "viz": True,
+                    "classes": {"car": "car", "pedestrian": "pedestrian"},
                 },
             },
             sort_keys=False,

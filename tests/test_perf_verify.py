@@ -40,7 +40,8 @@ def project(tmp_path):
                     "prefetch": 2,
                     "write_workers": 2,
                 },
-                "detect": {"model": "mock-detect", "ontology": "ontology.yaml", "device": "cpu"},
+                "detect": {"model": "mock-detect", "device": "cpu",
+                           "classes": {"car": "car"}},
             },
             sort_keys=False,
         ),
@@ -162,7 +163,8 @@ def test_viz_kind_independent(tmp_path):
         "dataset": {"image_dir": "raw", "out_dir": "out"},
         "tasks": ["depth", "detect"],
         "depth": {"model": "mock-depth", "device": "cpu"},
-        "detect": {"model": "mock-detect", "ontology": "ontology.yaml", "device": "cpu"},
+        "detect": {"model": "mock-detect", "device": "cpu",
+                   "classes": {"car": "car"}},
     }), encoding="utf-8")
 
     runner = CliRunner()

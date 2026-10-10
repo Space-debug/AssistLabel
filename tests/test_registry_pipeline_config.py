@@ -84,7 +84,7 @@ def test_load_run_config_resolves_relative_paths(tmp_path):
     cfg = load_run_config(cfg_file)
     assert cfg.dataset.image_dir == tmp_path / "data" / "raw"
     assert cfg.dataset.out_dir == tmp_path / "out"
-    assert cfg.detect.ontology == tmp_path / "ontology.yaml"
+    assert not hasattr(cfg.detect, "ontology")
 
 
 def test_config_rejects_unknown_task():

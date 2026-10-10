@@ -31,7 +31,6 @@ class DepthCfg(BaseModel):
 
 class DetectCfg(BaseModel):
     model: str = "sam3"
-    ontology: Path = Path("ontology.yaml")
     device: str = "cuda"
     half: bool = False
     conf_thres: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -42,6 +41,10 @@ class DetectCfg(BaseModel):
     )
     prefetch: int = Field(default=2, ge=1, description="Decoded images kept ahead of the GPU")
     write_workers: int = Field(default=2, ge=1, description="Threads writing COCO/semantic while GPU infers")
+    classes: dict[str, str] = Field(
+        default_factory=dict,
+        description="类别名 -> SAM3 提示词，如 {car: {prompt: 'car'}}；ontology.yaml 已合并至此",
+    )
 
     @field_validator("seg_format")
     @classmethod
@@ -95,6 +98,4 @@ def load_run_config(path: str | Path) -> RunConfig:
         cfg.dataset.image_dir = base / cfg.dataset.image_dir
     if not cfg.dataset.out_dir.is_absolute():
         cfg.dataset.out_dir = base / cfg.dataset.out_dir
-    if not cfg.detect.ontology.is_absolute():
-        cfg.detect.ontology = base / cfg.detect.ontology
     return cfg

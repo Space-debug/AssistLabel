@@ -14,7 +14,6 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .core.ontology import EXAMPLE as ONTOLOGY_EXAMPLE
 from .core.registry import ModelRegistry
 from .io.dataset import out_paths, scan_images
 
@@ -53,7 +52,6 @@ depth:
 
 detect:
   model: "{detect_model}"
-  ontology: "ontology.yaml"
   device: cuda
   half: false
   conf_thres: 0.5
@@ -62,6 +60,9 @@ detect:
   seg_format: polygon           # polygon(默认, ultralytics 兼容) | rle(压缩, 体积小)
   prefetch: 2                  # decoded images kept ready ahead of the GPU
   write_workers: 2             # COCO/semantic write threads overlapping inference
+  classes:                       # 类别名 -> SAM3 提示词（按此顺序分配 category_id）
+    car: {prompt: "car"}
+    pedestrian: {prompt: "pedestrian walking on the road"}
 
 """
 
@@ -117,12 +118,12 @@ def _pick_default(registry: ModelRegistry, kind: str, preference: list[str]) -> 
     return next(iter(models), None)
 
 
-@app.command(help="生成项目配置：run.yaml + ontology.yaml + data/raw 目录")
+@app.command(help="生成项目配置：run.yaml（含类别定义）+ data/raw 目录")
 def init(
     dir: Path = typer.Option(Path("."), "--dir", help="Project directory to scaffold."),
     engine: str = typer.Option("auto", "--engine", help="auto | mock (mock = no GPU deps, for pipeline testing)."),
 ):
-    """Scaffold run.yaml + ontology.yaml for a new dataset project."""
+    """Scaffold run.yaml for a new dataset project."""
     (dir / "data" / "raw").mkdir(parents=True, exist_ok=True)
 
     registry = ModelRegistry.load()
@@ -137,10 +138,9 @@ def init(
         RUN_YAML_TEMPLATE.format(depth_model=depth_model, detect_model=detect_model),
         encoding="utf-8",
     )
-    (dir / "ontology.yaml").write_text(ONTOLOGY_EXAMPLE, encoding="utf-8")
-    console.print(f"Created [cyan]{run_yaml}[/], [cyan]{dir / 'ontology.yaml'}[/]")
+    console.print(f"Created [cyan]{run_yaml}[/]")
     console.print(f"  depth model:  {depth_model}\n  detect model: {detect_model}")
-    console.print("Next: drop images into data/raw, edit ontology.yaml, then:\n"
+    console.print("Next: drop images into data/raw, edit run.yaml detect.classes, then:\n"
                   "  assistlabel run -c run.yaml")
 
 
@@ -234,9 +234,7 @@ def detect_config_changed(cfg, manifest) -> bool:
     """True when the ontology hash on disk differs from stored detect labels."""
     import hashlib
 
-    if not cfg.detect.ontology.exists():
-        return False
-    current = hashlib.sha1(cfg.detect.ontology.read_bytes()).hexdigest()[:12]
+    current = hashlib.sha1(repr(sorted(cfg.detect.classes.items())).encode()).hexdigest()[:12]
     mismatched = sum(
         1 for rec in manifest.records.values()
         if rec.get("tasks", {}).get("detect", {}).get("status") == "done"
