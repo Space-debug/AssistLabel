@@ -119,8 +119,10 @@ detect:
   prefetch: 2                    # 解码预取队列深度
   write_workers: 2               # COCO/semantic 写盘线程（与推理重叠）
   classes:                       # 类别名 -> SAM3 提示词（按此顺序分配 category_id）
-    car: "car"
-    pedestrian: "pedestrian walking on the road"
+    car: "car"                   # 字符串写法：用全局 conf_thres
+    pedestrian:                  # 对象写法：可对该类单独设 conf_thres
+      prompt: "pedestrian walking on the road"
+      conf_thres: 0.65
 ```
 
 ### 2.3 输出说明
@@ -306,7 +308,7 @@ assistlabel/
 ```bash
 python -m venv .venv && .venv\Scripts\activate
 pip install -e ".[dev]"
-pytest tests/ -q   # 73 passed
+pytest tests/ -q   # 76 passed
 ```
 
 测试覆盖：几何（IoU/NMS/掩码转换 roundtrip）、标注格式（COCO store、RLE、

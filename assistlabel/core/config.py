@@ -29,6 +29,13 @@ class DepthCfg(BaseModel):
     png_compression: int = Field(default=3, ge=0, le=9, description="PNG compression (0 fastest, 9 smallest)")
 
 
+class DetectClassSpec(BaseModel):
+    """Per-class detect spec: SAM3 prompt + optional conf_thres override."""
+
+    prompt: str
+    conf_thres: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class DetectCfg(BaseModel):
     model: str = "sam3"
     device: str = "cuda"
@@ -41,9 +48,12 @@ class DetectCfg(BaseModel):
     )
     prefetch: int = Field(default=2, ge=1, description="Decoded images kept ahead of the GPU")
     write_workers: int = Field(default=2, ge=1, description="Threads writing COCO/semantic while GPU infers")
-    classes: dict[str, str] = Field(
+    classes: dict[str, str | DetectClassSpec] = Field(
         default_factory=dict,
-        description="类别名 -> SAM3 提示词，如 {car: {prompt: 'car'}}；ontology.yaml 已合并至此",
+        description=(
+            "类别名 -> SAM3 提示词。值为字符串时用全局 conf_thres；"
+            "值为 {prompt, conf_thres} 时对该类单独设阈值"
+        ),
     )
 
     @field_validator("seg_format")
@@ -52,6 +62,23 @@ class DetectCfg(BaseModel):
         if v not in ("polygon", "rle"):
             raise ValueError("detect.seg_format must be 'polygon' or 'rle'")
         return v
+
+    @property
+    def class_prompts(self) -> dict[str, str]:
+        """类别名 -> SAM3 提示词（两种写法归一化）。"""
+        return {
+            name: (v if isinstance(v, str) else v.prompt)
+            for name, v in self.classes.items()
+        }
+
+    @property
+    def class_conf_overrides(self) -> dict[str, float]:
+        """带单独阈值的类别 -> conf_thres（仅包含显式覆盖的类）。"""
+        return {
+            name: v.conf_thres
+            for name, v in self.classes.items()
+            if not isinstance(v, str) and v.conf_thres is not None
+        }
 
 
 class DownloadCfg(BaseModel):

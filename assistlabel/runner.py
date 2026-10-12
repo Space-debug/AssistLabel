@@ -413,14 +413,19 @@ def build_viz(
 # ---------------------------------------------------------------------------
 # detect phase: pipelined (prefetch decode | (image,prompt) pairs | async writes)
 # ---------------------------------------------------------------------------
-def make_detect_infer(cfg: RunConfig, engine: BaseEngine, prompts_by_class: list[tuple[str, str]]):
+def make_detect_infer(cfg: RunConfig, engine: BaseEngine, prompts_by_class: list[tuple[str, str]],
+                      conf_thres: float):
     """fn(image_path, rgb) -> detections. Labels are SAM3 prompts; the writer
-    maps them to ontology class names (single mapping point)."""
+    maps them to ontology class names (single mapping point).
+
+    ``conf_thres`` is the *floor* across all classes (per-class overrides are
+    re-applied in the writer), so nothing is dropped before the per-class cut.
+    """
     def infer(image_path: Path, rgb: np.ndarray) -> list[Detection]:
         return engine.infer(
             rgb,
             prompts=[p for _, p in prompts_by_class],
-            conf_thres=cfg.detect.conf_thres,
+            conf_thres=conf_thres,
             max_objects_per_prompt=cfg.detect.max_objects_per_prompt,
             nms_iou=cfg.detect.nms_iou,
         )
@@ -429,7 +434,8 @@ def make_detect_infer(cfg: RunConfig, engine: BaseEngine, prompts_by_class: list
 
 
 def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
-                       class_ids: dict[str, int]):
+                       class_ids: dict[str, int],
+                       conf_by_class: dict[str, float] | None = None):
     """fn(image_path, rgb, dets) -> fragment for the COCO store.
 
     Writes ``semantic/<stem>.png`` (class-index annotation) and returns a COCO
@@ -437,18 +443,26 @@ def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
 
     dets arrive labeled with their SAM3 prompt; the prompt -> ontology class
     mapping (from prompts_by_class) is applied here — single mapping point.
+    ``conf_by_class`` holds per-class conf_thres overrides; classes without an
+    override keep every detection above the phase's floor threshold.
     可视化（detect_viz / semantic_viz）不在此处生成，统一由
     ``assistlabel viz`` 按需产出。
     """
     prompt_to_class = {p: c for c, p in prompts_by_class}
+    conf_by_class = conf_by_class or {}
 
     def write(image_path: Path, rgb: np.ndarray, dets: list[Detection]) -> dict:
         paths = out_paths(cfg.dataset.out_dir, image_path, cfg.dataset.image_dir)
         h, w = rgb.shape[:2]
 
-        # dets arrive labeled with their SAM3 prompt -> map to ontology class
+        # dets arrive labeled with their SAM3 prompt -> map to ontology class,
+        # then apply per-class conf_thres (class without override: keep all)
         for det in dets:
             det.label = prompt_to_class.get(det.label, det.label)
+        dets = [
+            d for d in dets
+            if d.score >= conf_by_class.get(d.label, -1.0)
+        ]
 
         canvas = np.zeros((h, w), dtype=np.uint8)
         anns: list[dict] = []
@@ -529,8 +543,14 @@ def _run_detect_phase(
     engine = build_engine(spec.provider, spec.hf_id, _engine_params(spec))
     engine.load(device=cfg.detect.device, half=cfg.detect.half, source=cfg.download.source)
 
-    prompts_by_class = [(name, prompt) for name, prompt in cfg.detect.classes.items()]
+    prompts_by_class = [
+        (name, prompt) for name, prompt in cfg.detect.class_prompts.items()
+    ]
     class_ids = {name: i + 1 for i, name in enumerate(cfg.detect.classes)}
+    # per-class conf_thres overrides；引擎请求用全类下限，写盘时按类精确过滤
+    conf_by_class = cfg.detect.class_conf_overrides
+    conf_floor = min([cfg.detect.conf_thres, *conf_by_class.values()]) \
+        if conf_by_class else cfg.detect.conf_thres
     # categories 是导出的权威定义（ontology 顺序，id 从 1 开始）
     coco["categories"] = [
         {"id": i + 1, "name": name, "supercategory": ""}
@@ -544,8 +564,8 @@ def _run_detect_phase(
         "\n".join(name for name, _ in cfg.detect.classes.items()) + "\n",
         encoding="utf-8",
     )
-    infer = make_detect_infer(cfg, engine, prompts_by_class)
-    write = make_detect_writer(cfg, prompts_by_class, class_ids)
+    infer = make_detect_infer(cfg, engine, prompts_by_class, conf_floor)
+    write = make_detect_writer(cfg, prompts_by_class, class_ids, conf_by_class)
     prompt_batch = max(1, int(getattr(engine, "prompt_batch", 4)))
     n_prompts = max(1, len(prompts_by_class))
 
@@ -599,7 +619,7 @@ def _run_detect_phase(
         try:
             results = engine.infer_pairs(
                 images, texts,
-                conf_thres=cfg.detect.conf_thres,
+                conf_thres=conf_floor,
                 max_objects_per_prompt=cfg.detect.max_objects_per_prompt,
                 nms_iou=cfg.detect.nms_iou,
             )
@@ -608,7 +628,7 @@ def _run_detect_phase(
             for _p, im, t in chunk:
                 try:
                     results.append(engine.infer(im, prompts=[t],
-                                                conf_thres=cfg.detect.conf_thres,
+                                                conf_thres=conf_floor,
                                                 max_objects_per_prompt=cfg.detect.max_objects_per_prompt,
                                                 nms_iou=cfg.detect.nms_iou))
                 except Exception as exc:  # noqa: BLE001
