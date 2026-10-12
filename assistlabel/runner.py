@@ -62,6 +62,35 @@ console = Console()
 _ENGINE_CACHE: dict[str, BaseEngine] = {}
 
 
+def quiet_progress() -> None:
+    """Kill third-party tqdm/hub progress bars (model loading noise)."""
+    import os
+
+    os.environ.setdefault("TQDM_DISABLE", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    try:
+        from transformers.utils import logging as hf_logging
+
+        hf_logging.disable_progress_bar()
+    except Exception:  # noqa: BLE001 — transformers optional in some paths
+        pass
+
+
+def _load_engine(cfg, registry: ModelRegistry, model_key: str, device: str,
+                 half: bool, source: str) -> BaseEngine:
+    """engine.load with a one-line status instead of raw tqdm bars."""
+    spec = registry.get(model_key)
+    engine = build_engine(spec.provider, spec.hf_id, _engine_params(spec))
+    import time as _time
+
+    console.print(f"正在加载模型 [cyan]{model_key}[/]（{spec.hf_id}）…")
+    t0 = _time.perf_counter()
+    quiet_progress()
+    engine.load(device=device, half=half, source=source)
+    console.print(f"模型 [cyan]{model_key}[/] 加载完成（{_time.perf_counter() - t0:.1f}s）")
+    return engine
+
+
 def build_engine(provider: str, hf_id: str, params: dict) -> BaseEngine:
     if provider in _ENGINE_CACHE:
         return _ENGINE_CACHE[provider]
@@ -173,9 +202,8 @@ def _run_depth_phase(
     progress: Progress,
     pid,
 ) -> None:
-    spec = registry.get(cfg.depth.model)
-    engine = build_engine(spec.provider, spec.hf_id, _engine_params(spec))
-    engine.load(device=cfg.depth.device, half=cfg.depth.half, source=cfg.download.source)
+    engine = _load_engine(cfg, registry, cfg.depth.model, cfg.depth.device,
+                          cfg.depth.half, cfg.download.source)
     write = make_depth_writer(cfg)
     batch_size = max(1, cfg.depth.batch_size)
 
@@ -540,9 +568,8 @@ def _run_detect_phase(
 
     coco = coco_load(coco_path)
 
-    spec = registry.get(cfg.detect.model)
-    engine = build_engine(spec.provider, spec.hf_id, _engine_params(spec))
-    engine.load(device=cfg.detect.device, half=cfg.detect.half, source=cfg.download.source)
+    engine = _load_engine(cfg, registry, cfg.detect.model, cfg.detect.device,
+                          cfg.detect.half, cfg.download.source)
 
     prompts_by_class = [
         (name, prompt) for name, prompt in cfg.detect.class_prompts.items()
@@ -588,10 +615,13 @@ def _run_detect_phase(
 
     write_pool = ThreadPoolExecutor(max_workers=max(1, cfg.detect.write_workers))
     futs: list = []
+    last_coco_dump = 0.0  # perf_counter of last annotations.json flush
 
-    def collect() -> None:
+    def ingest(done: list) -> None:
+        """Merge finished write results, advance progress, throttled dump."""
+        nonlocal last_coco_dump
         n = 0
-        for f in futs:
+        for f in done:
             path, ok, err, fragment = f.result()
             n += 1
             if ok:
@@ -605,10 +635,24 @@ def _run_detect_phase(
             else:
                 report.failed += 1
                 report.failures.append({"image": path, "task": "detect", "error": err})
-        futs.clear()
         progress.advance(pid, n)
         manifest.maybe_save(5.0)
-        coco_save(coco, coco_path)
+        import time as _time
+
+        if _time.perf_counter() - last_coco_dump > 5.0:
+            coco_save(coco, coco_path)
+            last_coco_dump = _time.perf_counter()
+
+    def drain_finished() -> None:
+        """Non-blocking: ingest write results already done so the progress
+        bar advances while inference continues."""
+        if not futs:
+            return
+        done = [f for f in futs if f.done()]
+        for f in done:
+            futs.remove(f)
+        if done:
+            ingest(done)
 
     pairs: list[tuple[Path, np.ndarray, str]] = []  # (path, rgb, prompt)
     states: dict[int, dict] = {}
@@ -677,15 +721,19 @@ def _run_detect_phase(
             flush_chunk()
             if len(pairs) == before:  # safety: never spin without progress
                 pairs.clear()
+            drain_finished()
     # stream end: flush remaining pairs and collect writes
     while pairs:
         before = len(pairs)
         flush_chunk()
         if len(pairs) == before:
             break
-    if futs:
-        collect()
+        drain_finished()
     write_pool.shutdown(wait=True)
+    if futs:  # blocking final ingest (includes the last throttled-dump window)
+        ingest(futs)
+        futs.clear()
+    coco_save(coco, coco_path)
 
 
 # ---------------------------------------------------------------------------
