@@ -195,15 +195,13 @@ def _depth_write_worker(write, manifest: Manifest, image_path: Path, result: dic
 
 def _run_depth_phase(
     cfg: RunConfig,
-    registry: ModelRegistry,
+    engine: BaseEngine,
     images: list[Path],
     manifest: Manifest,
     report: RunReport,
     progress: Progress,
     pid,
 ) -> None:
-    engine = _load_engine(cfg, registry, cfg.depth.model, cfg.depth.device,
-                          cfg.depth.half, cfg.download.source)
     write = make_depth_writer(cfg)
     batch_size = max(1, cfg.depth.batch_size)
 
@@ -552,7 +550,7 @@ def _detect_write_worker(write, manifest: Manifest, ontology_hash: str,
 
 def _run_detect_phase(
     cfg: RunConfig,
-    registry: ModelRegistry,
+    engine: BaseEngine,
     images: list[Path],
     manifest: Manifest,
     report: RunReport,
@@ -567,9 +565,6 @@ def _run_detect_phase(
     import queue
 
     coco = coco_load(coco_path)
-
-    engine = _load_engine(cfg, registry, cfg.detect.model, cfg.detect.device,
-                          cfg.detect.half, cfg.download.source)
 
     prompts_by_class = [
         (name, prompt) for name, prompt in cfg.detect.class_prompts.items()
@@ -829,9 +824,14 @@ def run_pipeline(
             with Progress(*columns, console=console) as progress:
                 pid = progress.add_task(task, total=len(pending))
                 if task == "depth":
-                    _run_depth_phase(cfg, registry, pending, manifest, report, progress, pid)
+                    # load before the bar opens so "正在加载模型" lines stay clean
+                    engine = _load_engine(cfg, registry, cfg.depth.model, cfg.depth.device,
+                                          cfg.depth.half, cfg.download.source)
+                    _run_depth_phase(cfg, engine, pending, manifest, report, progress, pid)
                 elif task == "detect":
-                    _run_detect_phase(cfg, registry, pending, manifest, report, progress, pid,
+                    engine = _load_engine(cfg, registry, cfg.detect.model, cfg.detect.device,
+                                          cfg.detect.half, cfg.download.source)
+                    _run_detect_phase(cfg, engine, pending, manifest, report, progress, pid,
                                       ontology_hash=_ontology_hash(cfg),
                                       coco_path=Path(cfg.dataset.out_dir) / "annotations.json")
                 else:
