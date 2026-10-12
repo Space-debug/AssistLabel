@@ -127,7 +127,7 @@ def _pick_default(registry: ModelRegistry, kind: str, preference: list[str]) -> 
     return next(iter(models), None)
 
 
-@app.command(help="生成项目配置：run.yaml（含类别定义）+ data/raw 目录")
+@app.command(help="Scaffold project config: run.yaml (with class defs) + data/raw dir")
 def init(
     dir: Path = typer.Option(Path("."), "--dir", help="Project directory to scaffold."),
     engine: str = typer.Option("auto", "--engine", help="auto | mock (mock = no GPU deps, for pipeline testing)."),
@@ -153,7 +153,7 @@ def init(
                   "  assistlabel run -c run.yaml")
 
 
-@app.command(help="批量标注流水线：断点续跑、崩溃安全；depth+detect 串行执行")
+@app.command(help="Batch labeling pipeline: resumable, crash-safe; depth+detect in sequence")
 def run(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
     tasks: str = typer.Option(None, "--tasks", help="Comma list overriding config tasks, e.g. depth,detect."),
@@ -186,7 +186,7 @@ def run(
         raise typer.Exit(code=1)
 
 
-@app.command(help="查看各任务进度（done/failed/pending/ETA），只读不执行")
+@app.command(help="Per-task progress (done/failed/pending/ETA), read-only")
 def status(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
     tasks: str = typer.Option(None, "--tasks", help="Comma list of tasks to report (default: config tasks)."),
@@ -255,10 +255,10 @@ def detect_config_changed(cfg, manifest) -> bool:
 
 
 
-@app.command(help="导出标注：yolo=ultralytics 布局（semantic/depth 由 run 原生产出）")
+@app.command(help="Export labels: yolo=ultralytics layout (semantic/depth come from run natively)")
 def export(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
-    fmt: str = typer.Option("yolo", "--format", help="yolo（ultralytics 训练布局）"),
+    fmt: str = typer.Option("yolo", "--format", help="yolo (ultralytics training layout)"),
     split: float = typer.Option(0.75, "--split", help="Train fraction (<1.0 writes a val split too)."),
 ):
     """从 detect 的 COCO 标注导出 ultralytics 训练布局。
@@ -271,12 +271,12 @@ def export(
 
     cfg = _load_cfg(config)
     if fmt != "yolo":
-        err_console.print(f"Unknown format: {fmt}（semantic/depth 由 run 原生产出，无需导出）")
+        err_console.print(f"Unknown format: {fmt} (semantic/depth are produced natively by run; no export needed)")
         raise typer.Exit(code=2)
 
     coco_json = Path(cfg.dataset.out_dir) / "annotations.json"
     if not coco_json.exists():
-        err_console.print(f"未找到 {coco_json}，请先运行 detect 任务")
+        err_console.print(f"{coco_json} not found - run the detect task first")
         raise typer.Exit(code=1)
 
     out_dir = Path(cfg.dataset.out_dir) / "ultralytics"
@@ -289,11 +289,11 @@ def export(
     )
 
 
-@app.command("viz")
+@app.command("viz", help="Generate/refresh viz (depth_viz/detect_viz/semantic_viz) from existing labels, no re-inference.")
 def viz_cmd(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
     kind: str = typer.Option("depth,detect,semantic", "--kind",
-                             help="逗号分隔: depth,detect,semantic"),
+                             help="comma list: depth,detect,semantic"),
 ):
     """从已有标注产物生成/刷新可视化（depth_viz/detect_viz/semantic_viz），不重新推理。"""
     from .runner import build_viz
@@ -301,12 +301,12 @@ def viz_cmd(
     cfg = _load_cfg(config)
     counts = build_viz(cfg, [k.strip() for k in kind.split(",")])
     console.print(
-        f"可视化已生成: depth_viz={counts['depth']} 张, detect_viz={counts['detect']} 张, "
-        f"semantic_viz={counts['semantic']} 张"
+        f"Generated: depth_viz={counts['depth']}, detect_viz={counts['detect']}, "
+        f"semantic_viz={counts['semantic']}"
     )
 
 
-@app.command(help="QA 质检：类别分布/置信度/深度有效率报告 + 复核清单")
+@app.command(help="QA: class distribution / score hist / depth validity report + review list")
 def validate(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
     report_path: Path = typer.Option(None, "--report", help="HTML report output path."),
@@ -336,7 +336,7 @@ def validate(
         console.print(f"Review list ({len(review)} images, lowest-confidence first) -> [cyan]{list_path}[/]")
 
 
-@app.command(help="产物完整性校验：撕裂写/源图变更检测，--repair 重置坏条目")
+@app.command(help="Output integrity check: torn writes / source changes; --repair resets bad entries")
 def verify(
     config: Path = typer.Option(Path("run.yaml"), "--config", "-c"),
     repair: bool = typer.Option(False, "--repair", help="Reset broken manifest entries for reprocessing."),
@@ -368,10 +368,10 @@ def verify(
 @app.command("help")
 def help_cmd(
     command: list[str] = typer.Argument(
-        None, help="要查询的命令名，支持多级：run / models / models download"
+        None, help="command name to query, multi-level: run / models / models download"
     ),
 ):
-    """显示命令的使用说明（等同 --help），支持多级子命令。"""
+    """Show command usage (same as --help), supports multi-level subcommands."""
     import click
 
     import typer.main
@@ -382,11 +382,11 @@ def help_cmd(
     for part in command or []:
         # 鸭子类型判断 Group（部分环境下 isinstance 检查不可靠）
         if not hasattr(target, "get_command"):
-            err_console.print(f"'{' '.join(command)}' 没有子命令 '{part}'")
+            err_console.print(f"'{' '.join(command)}' has no subcommand '{part}'")
             raise typer.Exit(code=2)
         sub = target.get_command(ctx, part)
         if sub is None:
-            err_console.print(f"未知命令 '{part}'（assistlabel --help 查看全部命令）")
+            err_console.print(f"Unknown command '{part}' (see assistlabel --help)")
             raise typer.Exit(code=2)
         ctx = click.Context(sub, parent=ctx, info_name=part)
         target = sub
@@ -396,31 +396,27 @@ def help_cmd(
 # ---------------------------------------------------------------------------
 @models_app.command("list")
 def models_list(
-    kind: str = typer.Option(None, "--kind", help="按类型过滤: depth | detect_segment"),
+    kind: str = typer.Option(None, "--kind", help="filter by kind: depth | detect_segment"),
 ):
-    """浏览所有已注册模型（含中文说明，挑选后再下载）。"""
+    """Browse all registered models (with notes) before downloading."""
     registry = ModelRegistry.load()
     models = [m for m in registry.all()
               if kind is None or m.kind == kind or m.provider == kind]
-    table = Table(title="Model registry — 挑选后执行 assistlabel models download <key>")
-    for col, w in (("key", None), ("kind", None), ("适用", None), ("权重仓库", None), ("说明", 46)):
+    table = Table(title="Model registry - run 'assistlabel models download <key>' to fetch")
+    for col, w in (("key", None), ("kind", None), ("domain", None), ("repo", None), ("notes", 46)):
         table.add_column(col, overflow="fold" if w else None, max_width=w)
-    kind_cn = {"depth": "深度", "detect_segment": "检测+实例分割", "video": "视频"}
     for spec in models:
-        domain_cn = {"metric": "米制深度", "relative": "相对深度",
-                     "indoor": "室内", "outdoor": "室外", "any": "通用"}.get(spec.domain, spec.domain)
         table.add_row(
-            f"[bold]{spec.key}[/]", kind_cn.get(spec.kind, spec.kind),
-            domain_cn, spec.hf_id or "-",
+            f"[bold]{spec.key}[/]", spec.kind, spec.domain or "-", spec.hf_id or "-",
             (spec.notes or "-")[:56],
         )
     console.print(table)
-    console.print("下载: assistlabel models download <key>   详情: assistlabel models info <key>")
+    console.print("Download: assistlabel models download <key>   Details: assistlabel models info <key>")
 
 
 @models_app.command("info")
-def models_info(key: str = typer.Argument(..., help="模型 key，见 models list")):
-    """查看单个模型的完整规格。"""
+def models_info(key: str = typer.Argument(..., help="model key, see models list")):
+    """Show full spec of one model."""
     registry = ModelRegistry.load()
     try:
         spec = registry.get(key)
@@ -432,7 +428,7 @@ def models_info(key: str = typer.Argument(..., help="模型 key，见 models lis
 
 @models_app.command("download")
 def models_download(
-    key: str = typer.Argument(..., help="模型 key，见 models list"),
+    key: str = typer.Argument(..., help="model key, see models list"),
     source: str = typer.Option("auto", "--source", help="auto | modelscope | huggingface"),
 ):
     """预下载模型权重（默认 ModelScope 优先，国内直连）。"""

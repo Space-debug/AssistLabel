@@ -87,10 +87,10 @@ def _load_engine(cfg, registry: ModelRegistry, model_key: str, device: str,
     engine = build_engine(spec.provider, spec.hf_id, _engine_params(spec))
     import time as _time
 
-    console.print(f"正在加载模型 [cyan]{model_key}[/]（{spec.hf_id}）…")
+    console.print(f"Loading model [cyan]{model_key}[/] ({spec.hf_id})...")
     t0 = _time.perf_counter()
     engine.load(device=device, half=half, source=source)
-    console.print(f"模型 [cyan]{model_key}[/] 加载完成（{_time.perf_counter() - t0:.1f}s）")
+    console.print(f"Model [cyan]{model_key}[/] loaded in {_time.perf_counter() - t0:.1f}s")
     return engine
 
 
@@ -240,7 +240,7 @@ def _run_depth_phase(
     write_pool = ThreadPoolExecutor(max_workers=max(1, cfg.depth.write_workers))
     prev_futs: list[Future] = []
     runtime_batch = [batch_size]  # halved on OOM so the run keeps going (P2-1)
-    clear_warmup = _warmup_task(progress, "depth 预热")
+    clear_warmup = _warmup_task(progress, "depth warmup")
 
     def collect(futs: list[Future]) -> None:
         """Wait for a batch's writes, absorb outcomes, persist the manifest."""
@@ -363,7 +363,7 @@ def build_viz(
 
         coco_path = out_dir / "annotations.json"
         if not coco_path.exists():
-            console.print(f"[yellow]semantic: 跳过（未找到 {coco_path}），先运行 detect 任务[/]")
+            console.print(f"[yellow]semantic: skipped ({coco_path} not found) - run the detect task first[/]")
             return counts
         coco = coco_load(coco_path)
         cats = {c["id"]: c["name"] for c in coco.get("categories", [])}
@@ -409,7 +409,7 @@ def build_viz(
 
         coco_path = out_dir / "annotations.json"
         if not coco_path.exists():
-            console.print(f"[yellow]detect: 跳过（未找到 {coco_path}），先运行 detect 任务[/]")
+            console.print(f"[yellow]detect: skipped ({coco_path} not found) - run the detect task first[/]")
             return counts
         coco = coco_load(coco_path)
         cats = {c["id"]: c["name"] for c in coco.get("categories", [])}
@@ -424,7 +424,7 @@ def build_viz(
         for im in coco.get("images", []):
             src = Path(cfg.dataset.image_dir) / im["file_name"]
             if not src.exists():
-                console.print(f"[yellow]detect: 源图缺失 {im['file_name']}，跳过[/]")
+                console.print(f"[yellow]detect: source image missing {im['file_name']}, skipped[/]")
                 continue
             rgb = _read_image_rgb(src)
             dets: list[Detection] = []
@@ -631,7 +631,7 @@ def _run_detect_phase(
     write_pool = ThreadPoolExecutor(max_workers=max(1, cfg.detect.write_workers))
     futs: list = []
     last_coco_dump = 0.0  # perf_counter of last annotations.json flush
-    clear_warmup = _warmup_task(progress, "sam3 预热")
+    clear_warmup = _warmup_task(progress, "sam3 warmup")
 
     def ingest(done: list) -> None:
         """Merge finished write results, advance progress, throttled dump."""
