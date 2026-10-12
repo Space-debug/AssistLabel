@@ -30,6 +30,14 @@ app.add_typer(models_app, name="models")
 console = Console()
 err_console = Console(stderr=True, style="bold red")
 
+
+@app.callback()
+def _quiet_third_party() -> None:
+    """Every subcommand silences third-party bars/chatter up front."""
+    from .runner import quiet_progress
+
+    quiet_progress()
+
 RUN_YAML_TEMPLATE = """\
 # AssistLabel run config. Paths are resolved relative to this file.
 dataset:

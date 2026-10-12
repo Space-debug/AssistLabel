@@ -63,15 +63,18 @@ _ENGINE_CACHE: dict[str, BaseEngine] = {}
 
 
 def quiet_progress() -> None:
-    """Kill third-party tqdm/hub progress bars (model loading noise)."""
+    """Silence third-party noise (tqdm/hub bars, info-level chatter) so the
+    run output only shows AssistLabel's own progress."""
     import os
 
     os.environ.setdefault("TQDM_DISABLE", "1")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("DA3_LOG_LEVEL", "ERROR")  # DA3 官方包自身的 INFO 噪音
     try:
         from transformers.utils import logging as hf_logging
 
         hf_logging.disable_progress_bar()
+        hf_logging.set_verbosity_error()  # 压掉 transformers 弃用/信息级提示
     except Exception:  # noqa: BLE001 — transformers optional in some paths
         pass
 
@@ -79,13 +82,13 @@ def quiet_progress() -> None:
 def _load_engine(cfg, registry: ModelRegistry, model_key: str, device: str,
                  half: bool, source: str) -> BaseEngine:
     """engine.load with a one-line status instead of raw tqdm bars."""
+    quiet_progress()  # before build_engine: engine module import reads env vars
     spec = registry.get(model_key)
     engine = build_engine(spec.provider, spec.hf_id, _engine_params(spec))
     import time as _time
 
     console.print(f"正在加载模型 [cyan]{model_key}[/]（{spec.hf_id}）…")
     t0 = _time.perf_counter()
-    quiet_progress()
     engine.load(device=device, half=half, source=source)
     console.print(f"模型 [cyan]{model_key}[/] 加载完成（{_time.perf_counter() - t0:.1f}s）")
     return engine
