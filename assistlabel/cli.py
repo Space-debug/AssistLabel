@@ -156,6 +156,7 @@ def run(
     """Run the batch labeling pipeline (resumable, crash-safe)."""
     from .runner import run_pipeline
 
+    console.clear()  # 上次中断残留的进度条帧会让新运行看起来“提前出条”，启动即清屏
     cfg = _load_cfg(config)
     task_list = [t.strip() for t in tasks.split(",")] if tasks else cfg.tasks
     redo = ["detect"] if redo_detect else []
