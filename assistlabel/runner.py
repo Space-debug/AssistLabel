@@ -91,6 +91,21 @@ def _load_engine(cfg, registry: ModelRegistry, model_key: str, device: str,
     return engine
 
 
+def _warmup_task(progress: Progress, label: str):
+    """Indeterminate spinner task shown until the first inference batch lands
+    (CUDA warm-up can sit at 0/N for seconds — show it's alive). Returns a
+    clear() that removes the task exactly once."""
+    warm_pid = progress.add_task(label, total=None)
+    state = {"cleared": False}
+
+    def clear() -> None:
+        if not state["cleared"]:
+            progress.remove_task(warm_pid)
+            state["cleared"] = True
+
+    return clear
+
+
 def build_engine(provider: str, hf_id: str, params: dict) -> BaseEngine:
     if provider in _ENGINE_CACHE:
         return _ENGINE_CACHE[provider]
@@ -222,6 +237,7 @@ def _run_depth_phase(
     write_pool = ThreadPoolExecutor(max_workers=max(1, cfg.depth.write_workers))
     prev_futs: list[Future] = []
     runtime_batch = [batch_size]  # halved on OOM so the run keeps going (P2-1)
+    clear_warmup = _warmup_task(progress, "depth 预热")
 
     def collect(futs: list[Future]) -> None:
         """Wait for a batch's writes, absorb outcomes, persist the manifest."""
@@ -242,20 +258,21 @@ def _run_depth_phase(
     def infer_results(items: list[tuple[Path, np.ndarray]]) -> list[dict]:
         imgs = [im for _p, im in items]
         try:
-            return engine.infer_batch(imgs)
+            out = engine.infer_batch(imgs)
         except Exception:  # batch-level failure (OOM, size quirks): degrade
             runtime_batch[0] = max(1, runtime_batch[0] // 2)  # P2-1: remember the smaller batch
             console.print(
                 f"[yellow]depth: batch inference failed, halving runtime batch to "
                 f"{runtime_batch[0]} for the rest of this run[/]"
             )
-            out: list[dict] = []
+            out = []
             for _p, im in items:
                 try:
                     out.append(engine.infer(im))
                 except Exception as exc:  # noqa: BLE001
                     out.append({"__error__": str(exc)})
-            return out
+        clear_warmup()
+        return out
 
     def submit_writes(items, results) -> list[Future]:
         futs: list[Future] = []
@@ -611,6 +628,7 @@ def _run_detect_phase(
     write_pool = ThreadPoolExecutor(max_workers=max(1, cfg.detect.write_workers))
     futs: list = []
     last_coco_dump = 0.0  # perf_counter of last annotations.json flush
+    clear_warmup = _warmup_task(progress, "sam3 预热")
 
     def ingest(done: list) -> None:
         """Merge finished write results, advance progress, throttled dump."""
@@ -676,6 +694,7 @@ def _run_detect_phase(
                                                 nms_iou=cfg.detect.nms_iou))
                 except Exception as exc:  # noqa: BLE001
                     results.append(exc)
+        clear_warmup()
         for (path, _rgb, _prompt), res in zip(chunk, results):
             state = states[id(path)]
             if isinstance(res, Exception):
