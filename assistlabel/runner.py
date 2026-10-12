@@ -443,8 +443,9 @@ def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
 
     dets arrive labeled with their SAM3 prompt; the prompt -> ontology class
     mapping (from prompts_by_class) is applied here — single mapping point.
-    ``conf_by_class`` holds per-class conf_thres overrides; classes without an
-    override keep every detection above the phase's floor threshold.
+    ``conf_by_class`` maps every class to its *effective* threshold (per-class
+    override, falling back to the global ``conf_thres``); the phase passes the
+    engine only the floor across classes so no class is cut early.
     可视化（detect_viz / semantic_viz）不在此处生成，统一由
     ``assistlabel viz`` 按需产出。
     """
@@ -456,12 +457,12 @@ def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
         h, w = rgb.shape[:2]
 
         # dets arrive labeled with their SAM3 prompt -> map to ontology class,
-        # then apply per-class conf_thres (class without override: keep all)
+        # then apply the per-class effective threshold (override or global)
         for det in dets:
             det.label = prompt_to_class.get(det.label, det.label)
         dets = [
             d for d in dets
-            if d.score >= conf_by_class.get(d.label, -1.0)
+            if d.score >= conf_by_class.get(d.label, cfg.detect.conf_thres)
         ]
 
         canvas = np.zeros((h, w), dtype=np.uint8)
@@ -547,10 +548,13 @@ def _run_detect_phase(
         (name, prompt) for name, prompt in cfg.detect.class_prompts.items()
     ]
     class_ids = {name: i + 1 for i, name in enumerate(cfg.detect.classes)}
-    # per-class conf_thres overrides；引擎请求用全类下限，写盘时按类精确过滤
-    conf_by_class = cfg.detect.class_conf_overrides
-    conf_floor = min([cfg.detect.conf_thres, *conf_by_class.values()]) \
-        if conf_by_class else cfg.detect.conf_thres
+    # 每类的有效阈值：单独覆盖 or 全局 conf_thres；引擎请求只用全类最低下限
+    conf_overrides = cfg.detect.class_conf_overrides
+    conf_by_class = {
+        name: conf_overrides.get(name, cfg.detect.conf_thres)
+        for name in cfg.detect.classes
+    }
+    conf_floor = min(conf_by_class.values()) if conf_by_class else cfg.detect.conf_thres
     # categories 是导出的权威定义（ontology 顺序，id 从 1 开始）
     coco["categories"] = [
         {"id": i + 1, "name": name, "supercategory": ""}

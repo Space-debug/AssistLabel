@@ -37,20 +37,43 @@ def test_writer_filters_by_per_class_threshold(tmp_path):
         cfg,
         prompts_by_class=[("car", "car"), ("pedestrian", "person walking")],
         class_ids={"car": 1, "pedestrian": 2},
-        conf_by_class={"pedestrian": 0.6},
+        conf_by_class={"car": 0.5, "pedestrian": 0.6},  # phase 传入完整有效阈值
     )
     h, w = 16, 16
     rgb = np.zeros((h, w, 3), np.uint8)
     mask = np.zeros((h, w), bool)
     mask[2:6, 2:6] = True
     dets = [
-        Detection(label="car", score=0.4, box=(2, 2, 6, 6), mask=mask.copy()),       # 全局 0.3：保留
+        Detection(label="car", score=0.55, box=(2, 2, 6, 6), mask=mask.copy()),      # car 阈值 0.5：保留
         Detection(label="person walking", score=0.5, box=(8, 8, 12, 12), mask=mask.copy()),  # 类阈值 0.6：丢弃
         Detection(label="person walking", score=0.7, box=(8, 2, 12, 6), mask=mask.copy()),   # 保留
     ]
     frag = writer(tmp_path / "raw" / "img.png", rgb, dets)
     cats = sorted(a["category_id"] for a in frag["annotations"])
     assert cats == [1, 2]
+
+
+def test_class_without_override_cut_at_global_threshold(tmp_path):
+    """floor 低到 0.3 时，未单独设阈值的类仍按全局 0.5 过滤（不得沿用 floor）。"""
+    cfg = _cfg(tmp_path)
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "out").mkdir()
+    writer = make_detect_writer(
+        cfg,
+        prompts_by_class=[("car", "car"), ("pedestrian", "person walking")],
+        class_ids={"car": 1, "pedestrian": 2},
+        conf_by_class={"car": 0.5, "pedestrian": 0.6},
+    )
+    h, w = 16, 16
+    rgb = np.zeros((h, w, 3), np.uint8)
+    mask = np.zeros((h, w), bool)
+    mask[2:6, 2:6] = True
+    dets = [
+        Detection(label="car", score=0.35, box=(2, 2, 6, 6), mask=mask.copy()),  # >floor 0.3 但 <全局 0.5：丢弃
+        Detection(label="car", score=0.55, box=(8, 8, 12, 12), mask=mask.copy()),  # 保留
+    ]
+    frag = writer(tmp_path / "raw" / "img.png", rgb, dets)
+    assert [a["category_id"] for a in frag["annotations"]] == [1]
 
 
 def test_yaml_accepts_both_forms(tmp_path):
