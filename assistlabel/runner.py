@@ -840,21 +840,25 @@ def run_pipeline(
             report.skipped += len(images) - len(pending)
             if not pending:
                 continue
+            # load OUTSIDE the Progress context: the bar must not render
+            # while the model is still loading
+            if task == "depth":
+                engine = _load_engine(cfg, registry, cfg.depth.model, cfg.depth.device,
+                                      cfg.depth.half, cfg.download.source)
+            elif task == "detect":
+                engine = _load_engine(cfg, registry, cfg.detect.model, cfg.detect.device,
+                                      cfg.detect.half, cfg.download.source)
+            else:
+                raise EngineError(f"Unknown task: {task}")
+
             with Progress(*columns, console=console) as progress:
                 pid = progress.add_task(task, total=len(pending))
                 if task == "depth":
-                    # load before the bar opens so "正在加载模型" lines stay clean
-                    engine = _load_engine(cfg, registry, cfg.depth.model, cfg.depth.device,
-                                          cfg.depth.half, cfg.download.source)
                     _run_depth_phase(cfg, engine, pending, manifest, report, progress, pid)
-                elif task == "detect":
-                    engine = _load_engine(cfg, registry, cfg.detect.model, cfg.detect.device,
-                                          cfg.detect.half, cfg.download.source)
+                else:
                     _run_detect_phase(cfg, engine, pending, manifest, report, progress, pid,
                                       ontology_hash=_ontology_hash(cfg),
                                       coco_path=Path(cfg.dataset.out_dir) / "annotations.json")
-                else:
-                    raise EngineError(f"Unknown task: {task}")
                 if report.failed:
                     progress.update(pid, description=f"{task} · {report.failed} failed")
             # unload phase engines so the next phase can take the GPU
