@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +31,8 @@ class Manifest:
         self.records: dict[str, dict] = {}  # keyed by image path string
         self._last_save = 0.0
         self._lock_fh = None
+        # write-pool threads mark() while the main thread save()s
+        self._mu = threading.RLock()
         if lock:
             self._acquire()
         self.load()
@@ -102,13 +105,16 @@ class Manifest:
         import time as _time
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # serialize records under the lock (mark() runs on write-pool threads),
+        # then write the lines out — file I/O stays outside the critical section
+        with self._mu:
+            lines = [json.dumps(rec, ensure_ascii=False) for rec in self.records.values()]
         fd, tmp = tempfile.mkstemp(
             dir=str(self.path.parent), prefix=".manifest_", suffix=".tmp"
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                for rec in self.records.values():
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                f.write("\n".join(lines) + ("\n" if lines else ""))
             os.replace(tmp, self.path)  # atomic on POSIX and Windows
             self._last_save = _time.monotonic()
         except BaseException:
@@ -131,30 +137,34 @@ class Manifest:
 
     # -- record access -----------------------------------------------------
     def get(self, image_path: str) -> dict:
-        return self.records.setdefault(
-            image_path, {"image": image_path, "tasks": {}, "total_objects": 0}
-        )
+        with self._mu:
+            return self.records.setdefault(
+                image_path, {"image": image_path, "tasks": {}, "total_objects": 0}
+            )
 
     def mark(self, image_path: str, task: str, status: str, **extra) -> dict:
-        rec = self.get(image_path)
-        entry = {"status": status, **extra}
-        rec["tasks"][task] = entry
-        return entry
+        with self._mu:
+            rec = self.get(image_path)
+            entry = {"status": status, **extra}
+            rec["tasks"][task] = entry
+            return entry
 
     def task_status(self, image_path: str, task: str) -> str | None:
-        entry = self.records.get(image_path, {}).get("tasks", {}).get(task)
+        with self._mu:
+            entry = self.records.get(image_path, {}).get("tasks", {}).get(task)
         return entry.get("status") if entry else None
 
     def is_done(self, image_path: str, task: str) -> bool:
         return self.task_status(image_path, task) == STATUS_DONE
 
     def summary(self) -> dict:
-        per_task: dict[str, dict[str, int]] = {}
-        for rec in self.records.values():
-            for task, entry in rec.get("tasks", {}).items():
-                bucket = per_task.setdefault(task, {STATUS_DONE: 0, STATUS_FAILED: 0})
-                if entry.get("status") in bucket:
-                    bucket[entry["status"]] += 1
+        with self._mu:
+            per_task: dict[str, dict[str, int]] = {}
+            for rec in self.records.values():
+                for task, entry in rec.get("tasks", {}).items():
+                    bucket = per_task.setdefault(task, {STATUS_DONE: 0, STATUS_FAILED: 0})
+                    if entry.get("status") in bucket:
+                        bucket[entry["status"]] += 1
         return {"images": len(self.records), "tasks": per_task}
 
 

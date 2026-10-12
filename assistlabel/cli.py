@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
+from .core.pipeline import ManifestLockedError
 from .core.registry import ModelRegistry
 from .io.dataset import out_paths, scan_images
 
