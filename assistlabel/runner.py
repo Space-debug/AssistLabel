@@ -706,6 +706,9 @@ def _run_detect_phase(
                 state["dets"].extend(res)
             state["remaining"] -= 1
             if state["remaining"] == 0:
+                # release the decoded RGB as soon as the image is fully inferred;
+                # keeping every image here leaks RAM linearly with dataset size
+                states.pop(id(path), None)
                 if state["errors"]:
                     err = "; ".join(state["errors"])
                     manifest.mark(str(path), "detect", STATUS_FAILED, error=err)
