@@ -74,6 +74,27 @@ class DepthAnything3Engine(BaseEngine):
         )
         self._model = self._model.to(self.device)
         self._model.eval()
+        self._use_inline_preprocess()
+
+    def _use_inline_preprocess(self) -> None:
+        """Preprocess batches inline instead of DA3's per-batch 8-thread pool.
+
+        The pipeline already decodes images on a producer thread; letting DA3
+        spawn a fresh ThreadPool for every batch adds overhead and competes for
+        the GIL. Falls back silently if the upstream API changes.
+        """
+        try:
+            from depth_anything_3.utils.io.input_processor import InputProcessor
+        except Exception:  # noqa: BLE001 - optional/private upstream API
+            return
+
+        class _InlineInputProcessor(InputProcessor):
+            def __call__(self, *args, **kwargs):
+                kwargs["num_workers"] = 1
+                kwargs["sequential"] = True
+                return super().__call__(*args, **kwargs)
+
+        self._model.input_processor = _InlineInputProcessor()
 
     def batch_key(self, image_rgb: np.ndarray) -> tuple[int, int]:
         """Processed (H, W) this image will have after DA3's input processor.
