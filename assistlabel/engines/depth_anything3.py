@@ -59,6 +59,10 @@ class DepthAnything3Engine(BaseEngine):
         load_from = self.resolved_dir or self.hf_id
         offline = self.resolved_dir is not None
 
+        # Weights stay fp32 on purpose: DA3's depth/pose heads run inside
+        # ``torch.autocast(enabled=False)`` while feeding fp32 inputs, so bf16
+        # weights would raise dtype mismatches. Compute is already bf16 autocast
+        # (the package picks bf16/fp16 itself), so ``half`` has no extra effect.
         self._model = DepthAnything3.from_pretrained(
             load_from, local_files_only=offline
         )
@@ -88,7 +92,7 @@ class DepthAnything3Engine(BaseEngine):
                 "depth_m": d,
                 "meta": {
                     "model": self.hf_id,
-                    "dtype": "fp32(da3-autocast-bf16)",
+                    "dtype": "fp32-weights/bf16-autocast",
                 },
             })
         return outs

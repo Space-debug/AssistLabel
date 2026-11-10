@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..core.engine import BaseEngine, Detection, EngineError
+from ..core.engine import BaseEngine, Detection, EngineError, weight_dtype
 from ..core.geometry import nms_boxes
 
 INSTALL_HINT = (
@@ -71,8 +71,11 @@ class Sam3Engine(BaseEngine):
         )
         load_from = self.resolved_dir or self.hf_id  # None -> let transformers try HF hub
 
+        dtype = weight_dtype(torch, self.device, half)
         self._model = Sam3Model.from_pretrained(
-            load_from, local_files_only=self.resolved_dir is not None
+            load_from,
+            dtype=dtype,
+            local_files_only=self.resolved_dir is not None,
         ).to(self.device).eval()
         try:
             self._processor = Sam3Processor.from_pretrained(
@@ -181,7 +184,9 @@ class Sam3Engine(BaseEngine):
             if masks is not None and i < len(masks):
                 m = masks[i]
                 if hasattr(m, "cpu"):
-                    m = m.cpu().numpy()
+                    # post-process returns int64 today, but keep this safe if a
+                    # future version hands back bf16 logits (numpy has no bf16)
+                    m = m.detach().float().cpu().numpy()
                 else:
                     m = np.asarray(m)
                 if m.shape == (size[0], size[1]):

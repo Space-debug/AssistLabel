@@ -53,3 +53,16 @@ def require(import_error: ImportError, package: str, hint: str) -> EngineError:
     return EngineError(
         f"Missing dependency '{package}' ({import_error}). {hint}"
     )
+
+
+def weight_dtype(torch, device: str, half: bool):
+    """Model weight dtype for the requested precision.
+
+    ``half=True`` means **bf16** on CUDA, not fp16: bf16 has the same exponent
+    range as fp32, so depth / box regression cannot overflow or underflow.
+    Compute kernels already run under bf16 autocast in both engines; this only
+    halves the resident weight footprint (~2.4 GB saved for DA3-Metric-L+SAM3).
+    """
+    if half and device == "cuda":
+        return torch.bfloat16
+    return torch.float32

@@ -22,7 +22,10 @@ class DatasetCfg(BaseModel):
 class DepthCfg(BaseModel):
     model: str = "da3-metric-L"
     device: str = "cuda"
-    half: bool = True
+    half: bool = Field(
+        default=True,
+        description="bf16 model weights on CUDA (see engines; fp16 is not used)",
+    )
     batch_size: int = Field(default=4, ge=1, description="Images per GPU batch")
     prefetch: int = Field(default=4, ge=1, description="Decoded images kept ahead of the GPU")
     write_workers: int = Field(default=2, ge=1, description="Threads writing PNGs while GPU infers")
@@ -39,7 +42,10 @@ class DetectClassSpec(BaseModel):
 class DetectCfg(BaseModel):
     model: str = "sam3"
     device: str = "cuda"
-    half: bool = False
+    half: bool = Field(
+        default=False,
+        description="bf16 model weights on CUDA (compute already uses bf16 autocast)",
+    )
     conf_thres: float = Field(default=0.5, ge=0.0, le=1.0)
     max_objects_per_prompt: int = Field(default=50, ge=1)
     nms_iou: float = Field(default=0.7, gt=0.0, le=1.0)

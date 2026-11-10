@@ -102,7 +102,7 @@ download:
 depth:
   model: "da3-metric-L"          # 深度引擎（见 models list）
   device: cuda
-  half: true                     # fp16 推理
+  half: true                     # bf16 权重（CUDA；DA3 权重仍为 fp32，计算已是 bf16）
   batch_size: 4                  # GPU 批量；显存充足可调到 8~16，OOM 则减小
   prefetch: 4                    # 解码预取队列深度（GPU 前保持的就绪图像数）
   write_workers: 2               # PNG/元数据写盘线程（与推理重叠）
@@ -111,7 +111,7 @@ depth:
 detect:
   model: "sam3"                  # 检测引擎
   device: cuda
-  half: false                    # fp16 推理（SAM3 默认 bf16 autocast，无需开启）
+  half: false                    # bf16 权重（计算已是 bf16 autocast；开启可省 ~1.7GB 显存）
   conf_thres: 0.5                # 置信度阈值
   max_objects_per_prompt: 50     # 每个提示词最多保留的检测数
   nms_iou: 0.7                   # 类内 NMS
@@ -257,7 +257,7 @@ assistlabel help models download  # 多级子命令
 | 参数 | 默认 | 建议 |
 |---|---|---|
 | `batch_size` | 4 | 显存允尽量调大（8~16）；OOM 则减半。对吞吐影响最大 |
-| `half` | true | fp16 推理，保持开启 |
+| `half` | true | bf16 权重（SAM3 生效；DA3 权重固定 fp32、计算走 bf16 autocast） |
 | `prefetch` | 4 | 磁盘慢（机械盘/网络盘）时调大，解码彻底不挡 GPU |
 | `write_workers` | 2 | NVMe 可 2-4；写入大 16-bit PNG 的收益明显 |
 

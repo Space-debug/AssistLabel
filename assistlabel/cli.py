@@ -53,7 +53,7 @@ download:
 depth:
   model: "{depth_model}"
   device: cuda
-  half: true
+  half: true                   # bf16 weights (CUDA); DA3 keeps fp32 weights, bf16 autocast
   batch_size: 4                # GPU batch; raise on big VRAM (8-16), lower on OOM
   prefetch: 4                  # decoded images kept ready ahead of the GPU
   write_workers: 2             # PNG/meta write threads overlapping inference
@@ -62,7 +62,7 @@ depth:
 detect:
   model: "{detect_model}"
   device: cuda
-  half: false
+  half: false                   # bf16 weights; compute already runs under bf16 autocast
   conf_thres: 0.5
   max_objects_per_prompt: 50
   nms_iou: 0.7
