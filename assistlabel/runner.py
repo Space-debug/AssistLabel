@@ -256,7 +256,9 @@ def _run_depth_phase(
         progress.advance(pid, n)
         if report.failed:
             progress.update(pid, description=f"depth · {report.failed} failed")
-        manifest.save()
+        # throttled: save() rewrites the whole manifest, so per-batch saves are
+        # O(N^2) on large datasets. Crash-safe final save happens in run_pipeline.
+        manifest.maybe_save(5.0)
 
     def infer_results(items: list[tuple[Path, np.ndarray]]) -> list[dict]:
         imgs = [im for _p, im in items]
