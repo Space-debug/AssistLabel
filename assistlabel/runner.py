@@ -45,11 +45,13 @@ from .core.registry import ModelRegistry
 from .engines.mock import MockDepthEngine, MockDetectEngine
 from .fusion.box_depth import annotate_detections_with_depth
 from .io.annotations import (
+    apply_fragments_to_coco,
     coco_load,
-    coco_next_annotation_id,
     coco_save,
-    coco_upsert_image,
-    rle_encode,
+    fragment_store_append,
+    fragment_store_load,
+    fragment_store_path,
+    fragment_store_rewrite,
 )
 from .io.dataset import file_hash, out_paths, scan_images
 from .io.depth_io import pseudocolor, read_depth_png, save_depth_png
@@ -618,55 +620,44 @@ def _run_detect_phase(
 
     write_pool = ThreadPoolExecutor(max_workers=max(1, cfg.detect.write_workers))
     futs: list = []
-    last_coco_dump = 0.0  # perf_counter of last annotations.json flush
-    pending_done: list[tuple[str, int]] = []  # written, not yet in annotations.json
     clear_warmup = _warmup_task(progress, "sam3 warmup")
 
-    def flush_done(force: bool = False) -> None:
-        """Persist labels first, then publish ``done`` statuses.
-
-        Ordering matters: if the process dies between the two writes, the
-        affected images stay pending in the manifest and are simply reprocessed
-        instead of being silently skipped without labels.
-        """
-        nonlocal last_coco_dump
-        if not pending_done:
-            return
-        import time as _time
-
-        if not force and _time.perf_counter() - last_coco_dump < 5.0:
-            return
-        coco_save(coco, coco_path)
-        for path, n_objects in pending_done:
-            manifest.mark(path, "detect", STATUS_DONE,
-                          n_objects=n_objects, ontology_hash=ontology_hash)
-        pending_done.clear()
-        manifest.save()
-        last_coco_dump = _time.perf_counter()
+    # Append-only journal: one flushed line per image, annotations.json is
+    # rebuilt once at the end (full rewrites here were O(N^2) on big datasets).
+    journal_path = fragment_store_path(coco_path)
+    fragments = fragment_store_load(journal_path)
 
     def ingest(done: list) -> None:
-        """Merge finished write results, advance progress, throttled dump."""
+        """Persist each fragment, then publish ``done``; advance progress."""
         n = 0
         for f in done:
             path, ok, err, fragment = f.result()
             n += 1
-            if ok:
-                report.processed += 1
-                n_objects = 0
-                if fragment:
-                    image_id = coco_upsert_image(coco, **fragment["image"])
-                    for ann in fragment["annotations"]:
-                        ann["image_id"] = image_id
-                        ann["id"] = coco_next_annotation_id(coco)
-                        coco["annotations"].append(ann)
-                    n_objects = len(fragment["annotations"])
-                pending_done.append((path, n_objects))
-            else:
+            if not ok:
                 report.failed += 1
                 report.failures.append({"image": path, "task": "detect", "error": err})
+                continue
+            report.processed += 1
+            n_objects = 0
+            if fragment:
+                name = fragment["image"]["file_name"]
+                try:
+                    fragment_store_append(journal_path, fragment)
+                except Exception as exc:  # noqa: BLE001 - disk full, etc.
+                    manifest.mark(path, "detect", STATUS_FAILED,
+                                  error=f"journal write failed: {exc}")
+                    report.processed -= 1
+                    report.failed += 1
+                    report.failures.append({"image": path, "task": "detect",
+                                            "error": f"journal write failed: {exc}"})
+                    continue
+                fragments[name] = fragment
+                n_objects = len(fragment["annotations"])
+            # done only after the fragment is on disk
+            manifest.mark(path, "detect", STATUS_DONE,
+                          n_objects=n_objects, ontology_hash=ontology_hash)
         progress.advance(pid, n)
-        manifest.maybe_save(5.0)  # failure statuses only; done marks wait for flush
-        flush_done()
+        manifest.maybe_save(5.0)
 
     def drain_finished() -> None:
         """Non-blocking: ingest write results already done so the progress
@@ -705,39 +696,45 @@ def _run_detect_phase(
                 return None, "; ".join(errors)
             return dets, None
 
-    while True:
-        item = q.get()
-        if item is sentinel:
-            break
-        path, rgb, err = item
-        if err is not None:
-            manifest.mark(str(path), "detect", STATUS_FAILED, error=str(err))
-            report.failed += 1
-            report.failures.append({"image": str(path), "task": "detect", "error": str(err)})
-            progress.advance(pid, 1)
-            continue
-        dets, err = infer_image(rgb)
-        if err is not None:
-            manifest.mark(str(path), "detect", STATUS_FAILED, error=err)
-            report.failed += 1
-            report.failures.append({"image": str(path), "task": "detect", "error": err})
-            progress.advance(pid, 1)
-            drain_finished()
-            continue
-        clear_warmup()
-        futs.append(write_pool.submit(
-            _detect_write_worker, write, manifest, ontology_hash,
-            path, rgb, dets,
-        ))
-        drain_finished()
-    write_pool.shutdown(wait=True)
-    if futs:  # blocking final ingest (includes the last throttled-dump window)
-        ingest(futs)
-        futs.clear()
-    if pending_done:
-        flush_done(force=True)
-    else:
+    def persist_coco() -> None:
+        """Merge the journal once and write annotations.json atomically."""
+        apply_fragments_to_coco(coco, fragments)
         coco_save(coco, coco_path)
+        fragment_store_rewrite(journal_path, fragments)
+
+    try:
+        while True:
+            item = q.get()
+            if item is sentinel:
+                break
+            path, rgb, err = item
+            if err is not None:
+                manifest.mark(str(path), "detect", STATUS_FAILED, error=str(err))
+                report.failed += 1
+                report.failures.append({"image": str(path), "task": "detect", "error": str(err)})
+                progress.advance(pid, 1)
+                continue
+            dets, err = infer_image(rgb)
+            if err is not None:
+                manifest.mark(str(path), "detect", STATUS_FAILED, error=err)
+                report.failed += 1
+                report.failures.append({"image": str(path), "task": "detect", "error": err})
+                progress.advance(pid, 1)
+                drain_finished()
+                continue
+            clear_warmup()
+            futs.append(write_pool.submit(
+                _detect_write_worker, write, manifest, ontology_hash,
+                path, rgb, dets,
+            ))
+            drain_finished()
+    finally:
+        # also runs on Ctrl+C: finish outstanding writes and publish the journal
+        write_pool.shutdown(wait=True)
+        if futs:
+            ingest(futs)
+            futs.clear()
+        persist_coco()
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +745,31 @@ def _disk_free_bytes(path: Path) -> int:
     while not p.exists():
         p = p.parent
     return shutil.disk_usage(str(p)).free
+
+
+def _detect_categories(cfg: RunConfig) -> list[dict]:
+    return [
+        {"id": i + 1, "name": name, "supercategory": ""}
+        for i, name in enumerate(cfg.detect.classes)
+    ]
+
+
+def rebuild_detect_coco(cfg: RunConfig) -> None:
+    """Rebuild annotations.json from the journal.
+
+    Needed when a previous run journaled its fragments but died before the
+    final merge (or when ``resume`` finds every image already done).
+    """
+    coco_path = Path(cfg.dataset.out_dir) / "annotations.json"
+    journal_path = fragment_store_path(coco_path)
+    fragments = fragment_store_load(journal_path)
+    if not fragments:
+        return
+    coco = coco_load(coco_path)
+    coco["categories"] = _detect_categories(cfg)
+    apply_fragments_to_coco(coco, fragments)
+    coco_save(coco, coco_path)
+    fragment_store_rewrite(journal_path, fragments)
 
 
 def ontology_mismatch_count(cfg: RunConfig, manifest: Manifest) -> int:
@@ -838,6 +860,10 @@ def run_pipeline(
         for task in tasks:
             pending = [im for im in images if not (resume and manifest.is_done(str(im), task))]
             if not pending:
+                if task == "detect":
+                    # a previous run may have journaled labels but died before
+                    # merging them into annotations.json
+                    rebuild_detect_coco(cfg)
                 continue
             # load OUTSIDE the Progress context: the bar must not render
             # while the model is still loading

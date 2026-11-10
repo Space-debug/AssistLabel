@@ -131,6 +131,7 @@ detect:
 out_dir/
 ├── manifest.jsonl      # 每图一行：路径、任务状态、耗时（断点续跑 + 溯源依据）
 ├── annotations.json    # 标准 COCO：polygon/RLE 实例掩码 + bbox + score
+├── annotations.jsonl   # detect 增量日志：每图一行，崩溃后据此重建 annotations.json
 ├── classes.txt         # 类别索引 -> 类别名（0=background）
 ├── depth/
 │   └── xxx.png         # 16-bit PNG，uint16 毫米，depth_m = pixel/1000，无效=0

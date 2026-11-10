@@ -91,6 +91,112 @@ def coco_next_annotation_id(coco: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Incremental fragment journal (annotations.jsonl)
+#
+# Rewriting annotations.json after every few seconds is O(N^2) on large
+# datasets. Instead each finished image appends one fragment:
+#     {"image": {...}, "annotations": [...]}
+# to a JSONL journal; annotations.json is rebuilt once at the end of the phase.
+# A line is flushed before the manifest marks the image done, so a crash can
+# never leave a ``done`` record whose labels were never persisted.
+# ---------------------------------------------------------------------------
+def fragment_store_path(coco_path: str | Path) -> Path:
+    """Journal path next to annotations.json (``annotations.jsonl``)."""
+    return Path(coco_path).with_suffix(".jsonl")
+
+
+def fragment_store_load(path: str | Path) -> dict[str, dict]:
+    """Load fragments keyed by COCO ``file_name``; later lines win.
+
+    A torn final line (crash mid-write) is ignored.
+    """
+    out: dict[str, dict] = {}
+    p = Path(path)
+    if not p.exists():
+        return out
+    with open(p, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                frag = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            name = (frag.get("image") or {}).get("file_name")
+            if name:
+                out[name] = frag
+    return out
+
+
+def fragment_store_append(path: str | Path, fragment: dict) -> None:
+    """Append one fragment and flush it to the OS before returning."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(json.dumps(fragment, ensure_ascii=False) + "\n")
+        f.flush()
+
+
+def fragment_store_rewrite(path: str | Path, fragments: dict[str, dict]) -> None:
+    """Atomically compact the journal to one line per image."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".coco_", suffix=".jsonl")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for name in sorted(fragments):
+                f.write(json.dumps(fragments[name], ensure_ascii=False) + "\n")
+        os.replace(tmp, p)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def apply_fragments_to_coco(coco: dict, fragments: dict[str, dict]) -> dict:
+    """Merge the journal into a COCO store, replacing any earlier annotations
+    for the same image (so re-runs / ``--redo-detect`` never duplicate)."""
+    by_name = {im["file_name"]: im for im in coco.get("images", [])}
+    next_image_id = max((im["id"] for im in coco.get("images", [])), default=0) + 1
+
+    for name in sorted(fragments):
+        frag = fragments[name]
+        image = frag.get("image") or {}
+        entry = by_name.get(name)
+        if entry is None:
+            entry = {
+                "id": next_image_id,
+                "file_name": name,
+                "width": int(image.get("width", 0)),
+                "height": int(image.get("height", 0)),
+            }
+            next_image_id += 1
+            by_name[name] = entry
+            coco.setdefault("images", []).append(entry)
+        else:
+            entry["width"] = int(image.get("width", entry.get("width", 0)))
+            entry["height"] = int(image.get("height", entry.get("height", 0)))
+
+    # drop previous annotations for every image the journal covers
+    covered_ids = {by_name[name]["id"] for name in fragments}
+    kept = [a for a in coco.get("annotations", []) if a.get("image_id") not in covered_ids]
+
+    next_ann_id = max((a.get("id", 0) for a in kept), default=0) + 1
+    for name in sorted(fragments):
+        image_id = by_name[name]["id"]
+        for ann in fragments[name].get("annotations", []):
+            item = dict(ann)
+            item["image_id"] = image_id
+            item["id"] = next_ann_id
+            next_ann_id += 1
+            kept.append(item)
+
+    coco["annotations"] = kept
+    return coco
+
+
+# ---------------------------------------------------------------------------
 # RLE helpers (COCO 压缩 RLE，pycocotools 标准格式)
 # ---------------------------------------------------------------------------
 def rle_encode(mask: np.ndarray) -> dict:
