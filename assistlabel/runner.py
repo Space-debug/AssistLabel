@@ -70,6 +70,10 @@ def quiet_progress() -> None:
     os.environ.setdefault("TQDM_DISABLE", "1")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     os.environ.setdefault("DA3_LOG_LEVEL", "ERROR")  # DA3 官方包自身的 INFO 噪音
+    # reduce allocator fragmentation from the large per-image mask tensors; must
+    # be set before torch initializes CUDA (quiet_progress runs from the CLI
+    # callback). Users can override with their own PYTORCH_CUDA_ALLOC_CONF.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     try:
         from transformers.utils import logging as hf_logging
 
