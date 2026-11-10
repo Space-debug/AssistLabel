@@ -1,0 +1,25 @@
+# Canonical line endings: LF in the repository and in every checkout.
+# Without this, Windows (core.autocrlf=true) writes CRLF into the working
+# tree; copying those files to Linux then makes every one look modified.
+* text=auto eol=lf
+
+# Windows launchers must keep CRLF if any are ever added.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets: never normalize.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.bmp binary
+*.gif binary
+*.webp binary
+*.tif binary
+*.tiff binary
+*.safetensors binary
+*.pt binary
+*.pth binary
+*.onnx binary
+*.npz binary
+*.npy binary
