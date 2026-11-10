@@ -544,11 +544,14 @@ def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
 
 def _detect_write_worker(write, manifest: Manifest, ontology_hash: str,
                          image_path: Path, rgb: np.ndarray, dets: list[Detection]):
-    """Runs inside the write pool: semantic + viz, returns the COCO fragment."""
+    """Runs inside the write pool: semantic + viz, returns the COCO fragment.
+
+    Success is *not* marked here: the caller marks ``done`` only after the
+    fragment has been persisted to annotations.json, so a crash can never leave
+    a ``done`` record whose labels are missing from the COCO file.
+    """
     try:
         fragment = write(image_path, rgb, dets)
-        manifest.mark(str(image_path), "detect", STATUS_DONE,
-                      n_objects=len(fragment["annotations"]), ontology_hash=ontology_hash)
         return str(image_path), True, None, fragment
     except Exception as exc:  # noqa: BLE001
         manifest.mark(str(image_path), "detect", STATUS_FAILED, error=str(exc))
@@ -616,33 +619,54 @@ def _run_detect_phase(
     write_pool = ThreadPoolExecutor(max_workers=max(1, cfg.detect.write_workers))
     futs: list = []
     last_coco_dump = 0.0  # perf_counter of last annotations.json flush
+    pending_done: list[tuple[str, int]] = []  # written, not yet in annotations.json
     clear_warmup = _warmup_task(progress, "sam3 warmup")
+
+    def flush_done(force: bool = False) -> None:
+        """Persist labels first, then publish ``done`` statuses.
+
+        Ordering matters: if the process dies between the two writes, the
+        affected images stay pending in the manifest and are simply reprocessed
+        instead of being silently skipped without labels.
+        """
+        nonlocal last_coco_dump
+        if not pending_done:
+            return
+        import time as _time
+
+        if not force and _time.perf_counter() - last_coco_dump < 5.0:
+            return
+        coco_save(coco, coco_path)
+        for path, n_objects in pending_done:
+            manifest.mark(path, "detect", STATUS_DONE,
+                          n_objects=n_objects, ontology_hash=ontology_hash)
+        pending_done.clear()
+        manifest.save()
+        last_coco_dump = _time.perf_counter()
 
     def ingest(done: list) -> None:
         """Merge finished write results, advance progress, throttled dump."""
-        nonlocal last_coco_dump
         n = 0
         for f in done:
             path, ok, err, fragment = f.result()
             n += 1
             if ok:
                 report.processed += 1
+                n_objects = 0
                 if fragment:
                     image_id = coco_upsert_image(coco, **fragment["image"])
                     for ann in fragment["annotations"]:
                         ann["image_id"] = image_id
                         ann["id"] = coco_next_annotation_id(coco)
                         coco["annotations"].append(ann)
+                    n_objects = len(fragment["annotations"])
+                pending_done.append((path, n_objects))
             else:
                 report.failed += 1
                 report.failures.append({"image": path, "task": "detect", "error": err})
         progress.advance(pid, n)
-        manifest.maybe_save(5.0)
-        import time as _time
-
-        if _time.perf_counter() - last_coco_dump > 5.0:
-            coco_save(coco, coco_path)
-            last_coco_dump = _time.perf_counter()
+        manifest.maybe_save(5.0)  # failure statuses only; done marks wait for flush
+        flush_done()
 
     def drain_finished() -> None:
         """Non-blocking: ingest write results already done so the progress
@@ -710,7 +734,10 @@ def _run_detect_phase(
     if futs:  # blocking final ingest (includes the last throttled-dump window)
         ingest(futs)
         futs.clear()
-    coco_save(coco, coco_path)
+    if pending_done:
+        flush_done(force=True)
+    else:
+        coco_save(coco, coco_path)
 
 
 # ---------------------------------------------------------------------------
