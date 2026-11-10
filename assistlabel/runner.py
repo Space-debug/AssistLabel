@@ -462,26 +462,8 @@ def build_viz(
 
 
 # ---------------------------------------------------------------------------
-# detect phase: pipelined (prefetch decode | (image,prompt) pairs | async writes)
+# detect phase: pipelined (prefetch decode | per-image inference | async writes)
 # ---------------------------------------------------------------------------
-def make_detect_infer(cfg: RunConfig, engine: BaseEngine, prompts_by_class: list[tuple[str, str]],
-                      conf_thres: float):
-    """fn(image_path, rgb) -> detections. Labels are SAM3 prompts; the writer
-    maps them to ontology class names (single mapping point).
-
-    ``conf_thres`` is the *floor* across all classes (per-class overrides are
-    re-applied in the writer), so nothing is dropped before the per-class cut.
-    """
-    def infer(image_path: Path, rgb: np.ndarray) -> list[Detection]:
-        return engine.infer(
-            rgb,
-            prompts=[p for _, p in prompts_by_class],
-            conf_thres=conf_thres,
-            max_objects_per_prompt=cfg.detect.max_objects_per_prompt,
-            nms_iou=cfg.detect.nms_iou,
-        )
-
-    return infer
 
 
 def make_detect_writer(cfg: RunConfig, prompts_by_class: list[tuple[str, str]],
@@ -615,10 +597,8 @@ def _run_detect_phase(
         "\n".join(name for name, _ in cfg.detect.classes.items()) + "\n",
         encoding="utf-8",
     )
-    infer = make_detect_infer(cfg, engine, prompts_by_class, conf_floor)
     write = make_detect_writer(cfg, prompts_by_class, class_ids, conf_by_class)
-    prompt_batch = max(1, int(getattr(engine, "prompt_batch", 4)))
-    n_prompts = max(1, len(prompts_by_class))
+    prompt_texts = [p for _c, p in prompts_by_class]
 
     q: queue.Queue = queue.Queue(maxsize=max(2, cfg.detect.prefetch))
     sentinel = object()
@@ -675,55 +655,31 @@ def _run_detect_phase(
         if done:
             ingest(done)
 
-    pairs: list[tuple[Path, np.ndarray, str]] = []  # (path, rgb, prompt)
-    states: dict[int, dict] = {}
-
-    def flush_chunk() -> None:
-        nonlocal pairs
-        if not pairs:
-            return
-        chunk, pairs = pairs[:prompt_batch], pairs[prompt_batch:]
-        images = [im for _p, im, _t in chunk]
-        texts = [t for _p, _im, t in chunk]
+    def infer_image(rgb: np.ndarray) -> tuple[list[Detection] | None, str | None]:
+        """All prompts for one image in a single engine call, so the SAM3
+        vision encoding is computed once and reused across prompts."""
         try:
-            results = engine.infer_pairs(
-                images, texts,
+            dets = engine.infer(
+                rgb, prompts=prompt_texts,
                 conf_thres=conf_floor,
                 max_objects_per_prompt=cfg.detect.max_objects_per_prompt,
                 nms_iou=cfg.detect.nms_iou,
             )
-        except Exception:  # batch-level failure (OOM): degrade to singles
-            results = []
-            for _p, im, t in chunk:
+            return dets, None
+        except Exception:  # batch-level failure (OOM): degrade to one prompt
+            dets, errors = [], []
+            for text in prompt_texts:
                 try:
-                    results.append(engine.infer(im, prompts=[t],
-                                                conf_thres=conf_floor,
-                                                max_objects_per_prompt=cfg.detect.max_objects_per_prompt,
-                                                nms_iou=cfg.detect.nms_iou))
-                except Exception as exc:  # noqa: BLE001
-                    results.append(exc)
-        clear_warmup()
-        for (path, _rgb, _prompt), res in zip(chunk, results):
-            state = states[id(path)]
-            if isinstance(res, Exception):
-                state["errors"].append(str(res))
-            else:
-                state["dets"].extend(res)
-            state["remaining"] -= 1
-            if state["remaining"] == 0:
-                # release the decoded RGB as soon as the image is fully inferred;
-                # keeping every image here leaks RAM linearly with dataset size
-                states.pop(id(path), None)
-                if state["errors"]:
-                    err = "; ".join(state["errors"])
-                    manifest.mark(str(path), "detect", STATUS_FAILED, error=err)
-                    report.failed += 1
-                    report.failures.append({"image": str(path), "task": "detect", "error": err})
-                else:
-                    futs.append(write_pool.submit(
-                        _detect_write_worker, write, manifest, ontology_hash,
-                        state["path"], state["rgb"], state["dets"],
+                    dets.extend(engine.infer(
+                        rgb, prompts=[text], conf_thres=conf_floor,
+                        max_objects_per_prompt=cfg.detect.max_objects_per_prompt,
+                        nms_iou=cfg.detect.nms_iou,
                     ))
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(str(exc))
+            if errors:
+                return None, "; ".join(errors)
+            return dets, None
 
     while True:
         item = q.get()
@@ -736,23 +692,19 @@ def _run_detect_phase(
             report.failures.append({"image": str(path), "task": "detect", "error": str(err)})
             progress.advance(pid, 1)
             continue
-        idx = id(path)
-        states[idx] = {"path": path, "rgb": rgb, "dets": [],
-                       "remaining": n_prompts, "errors": []}
-        for _c, _p in prompts_by_class:
-            pairs.append((path, rgb, _p))
-        while len(pairs) >= prompt_batch:
-            before = len(pairs)
-            flush_chunk()
-            if len(pairs) == before:  # safety: never spin without progress
-                pairs.clear()
+        dets, err = infer_image(rgb)
+        if err is not None:
+            manifest.mark(str(path), "detect", STATUS_FAILED, error=err)
+            report.failed += 1
+            report.failures.append({"image": str(path), "task": "detect", "error": err})
+            progress.advance(pid, 1)
             drain_finished()
-    # stream end: flush remaining pairs and collect writes
-    while pairs:
-        before = len(pairs)
-        flush_chunk()
-        if len(pairs) == before:
-            break
+            continue
+        clear_warmup()
+        futs.append(write_pool.submit(
+            _detect_write_worker, write, manifest, ontology_hash,
+            path, rgb, dets,
+        ))
         drain_finished()
     write_pool.shutdown(wait=True)
     if futs:  # blocking final ingest (includes the last throttled-dump window)

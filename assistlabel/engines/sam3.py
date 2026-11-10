@@ -32,9 +32,6 @@ REQUIRED_FILES = [
     "special_tokens_map.json",
 ]
 
-DEFAULT_PROMPT_BATCH = 4  # prompts per forward; bounds VRAM (image repeated per prompt)
-
-
 class Sam3Engine(BaseEngine):
     name = "sam3"
 
@@ -46,6 +43,9 @@ class Sam3Engine(BaseEngine):
         self._model = None
         self._processor = None
         self._torch = None
+        # prompt -> (text encoder output, attention mask); prompts are fixed for
+        # a run, so the text encoder is paid once per class, not per image
+        self._text_cache: dict[str, tuple] = {}
 
     def load(self, device: str = "cuda", half: bool = False, source: str = "auto") -> None:
         try:
@@ -87,19 +87,16 @@ class Sam3Engine(BaseEngine):
                 load_from, local_files_only=self.resolved_dir is not None
             )
             self._processor = Sam3Processor(Sam3ImageProcessor(), tokenizer)
+        self._text_cache.clear()
 
     def unload(self) -> None:
         self._model = None
         self._processor = None
+        self._text_cache.clear()
         if self._torch is not None and self._torch.cuda.is_available():
             self._torch.cuda.empty_cache()
 
     # -- inference ----------------------------------------------------------
-    @property
-    def prompt_batch(self) -> int:
-        """(image, prompt) pairs per forward pass; bounds VRAM."""
-        return max(1, int(self.params.get("prompt_batch", DEFAULT_PROMPT_BATCH)))
-
     def infer(
         self,
         image_rgb: np.ndarray,
@@ -127,10 +124,11 @@ class Sam3Engine(BaseEngine):
         nms_iou: float = 0.7,
         **params,
     ) -> list[list[Detection]]:
-        """Batched (image, prompt) pairs -> one Detection list per pair.
+        """(image, prompt) pairs -> one Detection list per pair.
 
-        Pairs may span multiple images; the processor pairs ``images[i]`` with
-        ``text[i]``. Chunked by ``prompt_batch`` to bound VRAM.
+        Consecutive pairs on the same image array share one vision encoding;
+        the (static) text encoding is cached per prompt. The old behaviour
+        re-ran the vision encoder once per prompt, which dominated detect time.
         """
         if self._model is None or self._processor is None:
             raise EngineError(f"{self.name}: call load() before infer()")
@@ -140,27 +138,54 @@ class Sam3Engine(BaseEngine):
             return []
 
         torch = self._torch
-        prompt_batch = self.prompt_batch
         out: list[list[Detection]] = []
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(self.device == "cuda")):
-            for i in range(0, len(images_rgb), prompt_batch):
-                ims = list(images_rgb[i : i + prompt_batch])
-                txt = list(prompts[i : i + prompt_batch])
-                inputs = self._processor(images=ims, text=txt, return_tensors="pt").to(self.device)
-                with torch.no_grad():
-                    outputs = self._model(**inputs)
-                target_sizes = [(im.shape[0], im.shape[1]) for im in ims]
-                for label, dets in zip(
-                    txt,
-                    self._postprocess(
-                        outputs, target_sizes, conf_thres,
+            i = 0
+            while i < len(images_rgb):
+                # consecutive pairs on the same array share one vision encoding
+                j = i + 1
+                while j < len(images_rgb) and images_rgb[j] is images_rgb[i]:
+                    j += 1
+                image = images_rgb[i]
+                target = (image.shape[0], image.shape[1])
+                vision = self._vision_embedding(image)
+                for prompt in prompts[i:j]:
+                    text_embeds, text_mask = self._text_embedding(prompt)
+                    with torch.no_grad():
+                        outputs = self._model(
+                            vision_embeds=vision,
+                            text_embeds=text_embeds,
+                            attention_mask=text_mask,
+                        )
+                    dets = self._postprocess(
+                        outputs, [target], conf_thres,
                         max_objects_per_prompt, nms_iou,
-                    ),
-                ):
+                    )[0]
                     for det in dets:
-                        det.label = label
+                        det.label = prompt
                     out.append(dets)
+                i = j
         return out
+
+    def _vision_embedding(self, image_rgb: np.ndarray):
+        """Run the vision encoder once for one image (the expensive part)."""
+        inputs = self._processor(images=[image_rgb], return_tensors="pt").to(self.device)
+        with self._torch.no_grad():
+            return self._model.get_vision_features(pixel_values=inputs["pixel_values"])
+
+    def _text_embedding(self, prompt: str) -> tuple:
+        """Cached text encoding for one prompt (static for the whole run)."""
+        cached = self._text_cache.get(prompt)
+        if cached is None:
+            inputs = self._processor(text=[prompt], return_tensors="pt").to(self.device)
+            with self._torch.no_grad():
+                embeds = self._model.get_text_features(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs.get("attention_mask"),
+                )
+            cached = (embeds, inputs.get("attention_mask"))
+            self._text_cache[prompt] = cached
+        return cached
 
     def _postprocess(
         self,
