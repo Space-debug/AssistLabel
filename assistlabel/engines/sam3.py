@@ -19,6 +19,8 @@ import numpy as np
 from ..core.engine import BaseEngine, Detection, EngineError, weight_dtype
 from ..core.geometry import nms_boxes
 
+MASK_CHUNK = 8  # survivors upsampled/transferred per batch (bounds GPU peak)
+
 INSTALL_HINT = (
     "sam3 engine needs transformers>=5 with SAM3 support"
     " (pip install 'transformers>=5') and torchvision."
@@ -291,26 +293,30 @@ class Sam3Engine(BaseEngine):
             scores_np = scores[kept].detach().float().cpu().numpy()
             order = nms_boxes(boxes.astype(np.float64), scores_np, iou_thres=nms_iou)[:max_objects]
 
-            detections: list[Detection] = []
-            for pos in order:
-                mask = None
-                if masks_all is not None:
-                    logit = masks_all[idx][kept[pos]]
+            # Materialize survivors in small chunks: one device->host sync per
+            # chunk instead of one per mask (each .cpu() drains the stream).
+            masks_np: dict[int, np.ndarray] = {}
+            if masks_all is not None:
+                for start in range(0, len(order), MASK_CHUNK):
+                    chunk = order[start:start + MASK_CHUNK]
+                    logits = torch.stack([masks_all[idx][kept[p]] for p in chunk]).float()
                     # sigmoid *before* upsampling: interpolating logits and
                     # thresholding at 0 would shrink every mask at the boundary
-                    prob = torch.sigmoid(logit.float())
-                    up = torch.nn.functional.interpolate(
-                        prob[None, None], size=(h, w),
-                        mode="bilinear", align_corners=False,
-                    )[0, 0]
-                    mask = (up > 0.5).cpu().numpy()
-                detections.append(
-                    Detection(
-                        label=None,  # filled by the caller
-                        score=float(scores_np[pos]),
-                        box=tuple(float(v) for v in boxes[pos]),
-                        mask=mask,
-                    )
+                    probs = torch.sigmoid(logits)[:, None]
+                    ups = torch.nn.functional.interpolate(
+                        probs, size=(h, w), mode="bilinear", align_corners=False,
+                    )[:, 0]
+                    for pos, mask in zip(chunk, (ups > 0.5).cpu().numpy()):
+                        masks_np[pos] = mask
+
+            detections: list[Detection] = [
+                Detection(
+                    label=None,  # filled by the caller
+                    score=float(scores_np[pos]),
+                    box=tuple(float(v) for v in boxes[pos]),
+                    mask=masks_np.get(pos),
                 )
+                for pos in order
+            ]
             results.append(detections)
         return results
