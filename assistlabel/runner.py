@@ -747,6 +747,9 @@ def run_pipeline(
     redo_tasks: list[str] | None = None,
     force: bool = False,
 ) -> RunReport:
+    import time as _time
+
+    started = _time.perf_counter()
     tasks = tasks or cfg.tasks
     registry = ModelRegistry.load()
     images = scan_images(cfg.dataset.image_dir, cfg.dataset.patterns)
@@ -797,10 +800,16 @@ def run_pipeline(
         TimeElapsedColumn(),
     )
 
+    # count skipped images once (an image is skipped only when every requested
+    # task is already done), not once per task
+    if resume:
+        report.skipped = sum(
+            1 for im in images if all(manifest.is_done(str(im), t) for t in tasks)
+        )
+
     try:
         for task in tasks:
             pending = [im for im in images if not (resume and manifest.is_done(str(im), task))]
-            report.skipped += len(images) - len(pending)
             if not pending:
                 continue
             # load OUTSIDE the Progress context: the bar must not render
@@ -832,5 +841,6 @@ def run_pipeline(
     finally:
         manifest.save()  # never lose resume state, even on Ctrl+C
         manifest.release()
+        report.seconds = _time.perf_counter() - started
 
     return report
