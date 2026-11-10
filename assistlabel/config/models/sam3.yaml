@@ -11,7 +11,7 @@ models:
     ms_id: facebook/sam3
     domain: any
     params:
-      prompt_batch: 4   # retained for config compatibility; vision encoding is now shared per image
+      prompt_batch: 4   # prompts decoded per forward (vision encoding shared; 1 disables batching)
     notes: "Loaded via transformers (pure pip, no clone). Image detection + instance seg, text prompts."
 
   - key: mock-detect

@@ -12,6 +12,8 @@ if the file is present (full HF cache) ``from_pretrained`` is preferred.
 
 from __future__ import annotations
 
+import types
+
 import numpy as np
 
 from ..core.engine import BaseEngine, Detection, EngineError, weight_dtype
@@ -127,8 +129,10 @@ class Sam3Engine(BaseEngine):
         """(image, prompt) pairs -> one Detection list per pair.
 
         Consecutive pairs on the same image array share one vision encoding;
-        the (static) text encoding is cached per prompt. The old behaviour
-        re-ran the vision encoder once per prompt, which dominated detect time.
+        the (static) text encoding is cached per prompt. For each image the
+        prompts are decoded in chunks of ``prompt_batch``: the vision embeds are
+        repeated across the chunk so one decoder pass serves several prompts
+        (same math per batch item, better GPU utilisation).
         """
         if self._model is None or self._processor is None:
             raise EngineError(f"{self.name}: call load() before infer()")
@@ -149,21 +153,31 @@ class Sam3Engine(BaseEngine):
                 image = images_rgb[i]
                 target = (image.shape[0], image.shape[1])
                 vision = self._vision_embedding(image)
-                for prompt in prompts[i:j]:
-                    text_embeds, text_mask = self._text_embedding(prompt)
-                    with torch.no_grad():
-                        outputs = self._model(
-                            vision_embeds=vision,
-                            text_embeds=text_embeds,
-                            attention_mask=text_mask,
+                chunk_size = self._prompt_batch
+                for start in range(i, j, chunk_size):
+                    chunk = prompts[start:start + chunk_size]
+                    text_embeds, text_mask = self._text_batch(chunk)
+                    if text_mask is None:  # no padding mask -> per-prompt fallback
+                        dets_per_prompt = [
+                            self._decode_one(vision, p, target, conf_thres,
+                                             max_objects_per_prompt, nms_iou)
+                            for p in chunk
+                        ]
+                    else:
+                        with torch.no_grad():
+                            outputs = self._model(
+                                vision_embeds=self._repeat_vision(vision, len(chunk)),
+                                text_embeds=text_embeds,
+                                attention_mask=text_mask,
+                            )
+                        dets_per_prompt = self._postprocess(
+                            outputs, [target] * len(chunk), conf_thres,
+                            max_objects_per_prompt, nms_iou,
                         )
-                    dets = self._postprocess(
-                        outputs, [target], conf_thres,
-                        max_objects_per_prompt, nms_iou,
-                    )[0]
-                    for det in dets:
-                        det.label = prompt
-                    out.append(dets)
+                    for prompt, dets in zip(chunk, dets_per_prompt):
+                        for det in dets:
+                            det.label = prompt
+                        out.append(dets)
                 i = j
         return out
 
@@ -186,6 +200,57 @@ class Sam3Engine(BaseEngine):
             cached = (embeds, inputs.get("attention_mask"))
             self._text_cache[prompt] = cached
         return cached
+
+    @property
+    def _prompt_batch(self) -> int:
+        """Prompts decoded together; bounds the decoder's batch memory."""
+        return max(1, int(self.params.get("prompt_batch", 4)))
+
+    def _text_batch(self, prompts: list[str]):
+        """Stack cached per-prompt text embeddings into one batch.
+
+        Returns ``(text_embeds, attention_mask)`` or ``(None, None)`` when any
+        prompt lacks a padding mask (then the caller falls back to a per-prompt
+        forward, matching the model's own expectation).
+        """
+        cached = [self._text_embedding(p) for p in prompts]
+        if any(mask is None for _e, mask in cached):
+            return None, None
+        pooled = self._torch.cat([e.pooler_output for e, _m in cached], dim=0)
+        mask = self._torch.cat([m for _e, m in cached], dim=0)
+        return types.SimpleNamespace(pooler_output=pooled), mask
+
+    def _repeat_vision(self, vision, count: int):
+        """Repeat one image's vision embeds across ``count`` prompts.
+
+        ``Sam3Model.forward`` only reads ``fpn_hidden_states`` and
+        ``fpn_position_encoding`` from ``vision_embeds``; every batch item is an
+        independent copy, so this is mathematically identical to separate
+        forwards — it just uses the GPU better.
+        """
+        if count == 1:
+            return vision
+        return types.SimpleNamespace(
+            fpn_hidden_states=[
+                t.repeat_interleave(count, dim=0) for t in vision.fpn_hidden_states
+            ],
+            fpn_position_encoding=[
+                t.repeat_interleave(count, dim=0) for t in vision.fpn_position_encoding
+            ],
+            # only forwarded into the output object, never read in the pipeline
+            hidden_states=None,
+            attentions=None,
+        )
+
+    def _decode_one(self, vision, prompt, target, conf_thres, max_objects, nms_iou):
+        text_embeds, text_mask = self._text_embedding(prompt)
+        with self._torch.no_grad():
+            outputs = self._model(
+                vision_embeds=vision,
+                text_embeds=text_embeds,
+                attention_mask=text_mask,
+            )
+        return self._postprocess(outputs, [target], conf_thres, max_objects, nms_iou)[0]
 
     def _postprocess(
         self,
