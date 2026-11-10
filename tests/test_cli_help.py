@@ -24,6 +24,7 @@ def test_help_single_command():
     r = runner.invoke(app, ["help", "run"])
     assert r.exit_code == 0
     assert "--limit" in r.output and "--redo-detect" in r.output
+    assert "--redo-depth" in r.output
 
 
 def test_help_multi_level():

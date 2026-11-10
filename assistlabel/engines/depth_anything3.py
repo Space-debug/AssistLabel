@@ -29,6 +29,12 @@ INSTALL_HINT = (
 
 REQUIRED_FILES = ["config.json", "model.safetensors"]
 
+# DA3's InputProcessor defaults (api.inference: process_res=504,
+# process_res_method="upper_bound_resize"); used to predict the processed
+# batch shape before inference.
+PROCESS_RES = 504
+PATCH_SIZE = 14
+
 
 class DepthAnything3Engine(BaseEngine):
     name = "depth_anything3"
@@ -68,6 +74,26 @@ class DepthAnything3Engine(BaseEngine):
         )
         self._model = self._model.to(self.device)
         self._model.eval()
+
+    def batch_key(self, image_rgb: np.ndarray) -> tuple[int, int]:
+        """Processed (H, W) this image will have after DA3's input processor.
+
+        DA3 center-crops a batch to the smallest member when processed sizes
+        differ (``InputProcessor._unify_batch_shapes``), so only images with the
+        same processed shape may share a batch — otherwise large images lose
+        their borders and the depth is stretched back over the wrong geometry.
+        """
+        h, w = image_rgb.shape[:2]
+        scale = PROCESS_RES / float(max(w, h))
+        nw = max(1, int(round(w * scale)))
+        nh = max(1, int(round(h * scale)))
+
+        def nearest_multiple(x: int) -> int:
+            down = (x // PATCH_SIZE) * PATCH_SIZE
+            up = down + PATCH_SIZE
+            return up if abs(up - x) <= abs(x - down) else down
+
+        return nearest_multiple(nh), nearest_multiple(nw)
 
     def infer(self, image_rgb: np.ndarray, **params) -> dict:
         return self.infer_batch([image_rgb], **params)[0]

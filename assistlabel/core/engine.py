@@ -45,6 +45,15 @@ class BaseEngine(ABC):
         support (GPU) override this."""
         return [self.infer(img, **params) for img in images_rgb]
 
+    def batch_key(self, image_rgb: np.ndarray) -> tuple[int, int]:
+        """Grouping key for batch inference.
+
+        The pipeline only batches consecutive images with the same key.
+        Engines that resize/pad a batch to a common shape must override this
+        so images that would be cropped together never share a batch.
+        """
+        return image_rgb.shape[:2]
+
     def unload(self) -> None:  # pragma: no cover - trivial
         pass
 

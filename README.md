@@ -179,6 +179,7 @@ assistlabel run -c run.yaml [选项]
 | `--resume/--no-resume` | 断点续跑开关（默认开；跳过 manifest 中已完成的图） |
 | `--limit N` | 只处理前 N 张（小批量试跑） |
 | `--redo-detect` | 清除全部 detect 状态后重跑（类别定义变更后使用） |
+| `--redo-depth` | 清除全部 depth 状态后重跑（分桶/精度策略修复后使用） |
 | `--force` | 跳过磁盘剩余空间预检 |
 
 执行中可随时 Ctrl+C 中断：进度已保存，重跑自动续。
@@ -262,7 +263,8 @@ assistlabel help models download  # 多级子命令
 | `write_workers` | 2 | NVMe 可 2-4；写入大 16-bit PNG 的收益明显 |
 
 其他已在引擎内启用的优化：cuDNN benchmark（固定输入尺寸自动选最快卷积核）、
-TF32（Ampere+ 显卡免费加速）、横竖图分桶批处理（避免 padding 浪费）、
+TF32（Ampere+ 显卡免费加速）、按处理分辨率精确分桶批处理（避免 DA3 批内中心裁剪
+导致的深度错位）、
 批量推理失败自动降级为逐图（防 OOM 连坐）。
 
 SAM3 检测阶段为逐图多提示模型（图像编码一次复用全部类别提示），

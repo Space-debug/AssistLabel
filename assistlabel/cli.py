@@ -160,6 +160,7 @@ def run(
     resume: bool = typer.Option(True, "--resume/--no-resume", help="Skip images already done in manifest."),
     limit: int = typer.Option(None, "--limit", help="Only process the first N images (pilot runs)."),
     redo_detect: bool = typer.Option(False, "--redo-detect", help="Clear all detect statuses first (e.g. after ontology changes)."),
+    redo_depth: bool = typer.Option(False, "--redo-depth", help="Clear all depth statuses first (e.g. after a batching/precision fix)."),
     force: bool = typer.Option(False, "--force", help="Skip the free-disk-space precheck."),
 ):
     """Run the batch labeling pipeline (resumable, crash-safe)."""
@@ -168,7 +169,11 @@ def run(
     console.clear()  # 上次中断残留的进度条帧会让新运行看起来“提前出条”，启动即清屏
     cfg = _load_cfg(config)
     task_list = [t.strip() for t in tasks.split(",")] if tasks else cfg.tasks
-    redo = ["detect"] if redo_detect else []
+    redo = []
+    if redo_detect:
+        redo.append("detect")
+    if redo_depth:
+        redo.append("depth")
     try:
         report = run_pipeline(cfg, task_list, resume=resume, limit=limit,
                               redo_tasks=redo, force=force)

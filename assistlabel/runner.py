@@ -155,10 +155,6 @@ def _write_image_jpg(path: Path, img_bgr: np.ndarray) -> None:
         buf.tofile(str(path))
 
 
-def _is_portrait(img: np.ndarray) -> bool:
-    return img.shape[0] > img.shape[1]
-
-
 def _relative_name(image_path: Path, image_dir: Path | None) -> str:
     """Portable COCO file_name: relative to image_dir, forward slashes."""
     import os
@@ -300,7 +296,7 @@ def _run_depth_phase(
         return futs
 
     batch: list[tuple[Path, np.ndarray]] = []
-    batch_portrait: bool | None = None
+    batch_key: tuple | None = None
 
     def flush() -> None:
         nonlocal batch, prev_futs
@@ -323,12 +319,13 @@ def _run_depth_phase(
             report.failures.append({"image": str(path), "task": "depth", "error": str(err)})
             progress.advance(pid, 1)
             continue
-        portrait = _is_portrait(img)
-        # orientation bucketing: same-orientation images batch together
-        if batch and (len(batch) >= runtime_batch[0] or portrait != batch_portrait):
+        # exact processed-resolution bucketing: DA3 center-crops mixed-size
+        # batches to the smallest member, which would corrupt depth geometry
+        key = engine.batch_key(img)
+        if batch and (len(batch) >= runtime_batch[0] or key != batch_key):
             flush()
         batch.append((path, img))
-        batch_portrait = portrait
+        batch_key = key
     flush()
     if prev_futs:
         collect(prev_futs)
