@@ -150,53 +150,77 @@ class Sam3Engine(BaseEngine):
                 with torch.no_grad():
                     outputs = self._model(**inputs)
                 target_sizes = [(im.shape[0], im.shape[1]) for im in ims]
-                segs = self._processor.post_process_instance_segmentation(
-                    outputs, threshold=conf_thres, target_sizes=target_sizes
-                )
-                for label, res, size in zip(txt, segs, target_sizes):
-                    out.append(self._filter(res, label, max_objects_per_prompt, nms_iou, size))
+                for label, dets in zip(
+                    txt,
+                    self._postprocess(
+                        outputs, target_sizes, conf_thres,
+                        max_objects_per_prompt, nms_iou,
+                    ),
+                ):
+                    for det in dets:
+                        det.label = label
+                    out.append(dets)
         return out
 
-    def _filter(
+    def _postprocess(
         self,
-        result: dict,
-        label: str,
+        outputs,
+        target_sizes: list[tuple[int, int]],
+        conf_thres: float,
         max_objects: int,
         nms_iou: float,
-        size: tuple[int, int],
-    ) -> list[Detection]:
-        # post-processed results come back on the model's device
-        scores_t = result["scores"]
-        boxes_t = result["boxes"]
-        if hasattr(scores_t, "cpu"):
-            scores_t = scores_t.detach().float().cpu()
-            boxes_t = boxes_t.detach().float().cpu()
-        scores = np.asarray(scores_t, dtype=np.float32).reshape(-1)
-        boxes = np.asarray(boxes_t, dtype=np.float64).reshape(-1, 4)
-        masks = result.get("masks")
-        if len(scores) == 0:
-            return []
+    ) -> list[list[Detection]]:
+        """Raw SAM3 outputs -> detections, without materializing full-resolution
+        masks for every candidate.
 
-        order = nms_boxes(boxes, scores, iou_thres=nms_iou)[:max_objects]
-        detections: list[Detection] = []
-        for i in order:
-            mask = None
-            if masks is not None and i < len(masks):
-                m = masks[i]
-                if hasattr(m, "cpu"):
-                    # post-process returns int64 today, but keep this safe if a
-                    # future version hands back bf16 logits (numpy has no bf16)
-                    m = m.detach().float().cpu().numpy()
-                else:
-                    m = np.asarray(m)
-                if m.shape == (size[0], size[1]):
-                    mask = m.astype(bool)
-            detections.append(
-                Detection(
-                    label=label,
-                    score=float(scores[i]),
-                    box=tuple(float(v) for v in boxes[i]),
-                    mask=mask,
+        ``processor.post_process_instance_segmentation`` upsamples *all*
+        above-threshold queries to the original image and casts them to int64
+        (16.6 MB per 1080p mask). We instead threshold + NMS in normalized box
+        space, keep at most ``max_objects``, and upsample only those survivors
+        one at a time as bool. Peak memory drops by an order of magnitude while
+        boxes/scores/masks stay numerically equivalent.
+        """
+        torch = self._torch
+        scores_all = outputs.pred_logits.sigmoid()
+        if getattr(outputs, "presence_logits", None) is not None:
+            scores_all = scores_all * outputs.presence_logits.sigmoid()
+        boxes_all = outputs.pred_boxes
+        masks_all = outputs.pred_masks
+
+        results: list[list[Detection]] = []
+        for idx, (h, w) in enumerate(target_sizes):
+            scores = scores_all[idx]
+            keep = scores > conf_thres
+            if not bool(keep.any()):
+                results.append([])
+                continue
+
+            kept = torch.nonzero(keep, as_tuple=False).flatten()
+            scale = torch.tensor([w, h, w, h], device=boxes_all.device, dtype=boxes_all.dtype)
+            boxes = (boxes_all[idx][kept] * scale).detach().float().cpu().numpy()
+            scores_np = scores[kept].detach().float().cpu().numpy()
+            order = nms_boxes(boxes.astype(np.float64), scores_np, iou_thres=nms_iou)[:max_objects]
+
+            detections: list[Detection] = []
+            for pos in order:
+                mask = None
+                if masks_all is not None:
+                    logit = masks_all[idx][kept[pos]]
+                    # sigmoid *before* upsampling: interpolating logits and
+                    # thresholding at 0 would shrink every mask at the boundary
+                    prob = torch.sigmoid(logit.float())
+                    up = torch.nn.functional.interpolate(
+                        prob[None, None], size=(h, w),
+                        mode="bilinear", align_corners=False,
+                    )[0, 0]
+                    mask = (up > 0.5).cpu().numpy()
+                detections.append(
+                    Detection(
+                        label=None,  # filled by the caller
+                        score=float(scores_np[pos]),
+                        box=tuple(float(v) for v in boxes[pos]),
+                        mask=mask,
+                    )
                 )
-            )
-        return detections
+            results.append(detections)
+        return results
