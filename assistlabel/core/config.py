@@ -49,6 +49,12 @@ class DetectCfg(BaseModel):
     conf_thres: float = Field(default=0.5, ge=0.0, le=1.0)
     max_objects_per_prompt: int = Field(default=50, ge=1)
     nms_iou: float = Field(default=0.7, gt=0.0, le=1.0)
+    prompt_batch: int | None = Field(
+        default=None,
+        ge=1,
+        description="Prompts decoded per forward; None = engine default (4). "
+        "Raise to 8 on >=16GB GPUs with more classes",
+    )
     seg_format: str = Field(
         default="polygon", description="COCO segmentation format: polygon | rle"
     )

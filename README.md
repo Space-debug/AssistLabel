@@ -115,6 +115,7 @@ detect:
   conf_thres: 0.5                # 置信度阈值
   max_objects_per_prompt: 50     # 每个提示词最多保留的检测数
   nms_iou: 0.7                   # 类内 NMS
+  # prompt_batch: 8              # 每次 forward 解码的提示词数（默认 4；≥16GB 卡可设 8）
   seg_format: polygon            # polygon(默认, ultralytics 兼容) | rle(压缩, 体积小)
   prefetch: 2                    # 解码预取队列深度
   write_workers: 2               # COCO/semantic 写盘线程（与推理重叠）
@@ -269,7 +270,8 @@ TF32（Ampere+ 显卡免费加速）、按处理分辨率精确分桶批处理�
 批量推理失败自动降级为逐图（防 OOM 连坐）。
 
 SAM3 检测阶段按图调用：视觉编码器每张图只跑一次，文本编码按提示词缓存并复用；
-每张图之后只对保留的实例做原分辨率插值（不再为全部候选生成 int64 全尺寸掩码）。
+多个提示词在 decoder 侧合批（`detect.prompt_batch`，默认 4，≥16GB 卡可设 8）；
+每张图之后只对保留的实例分块做原分辨率插值（不再为全部候选生成 int64 全尺寸掩码）。
 `detect.conf_thres` 调高可进一步减少候选与写盘量。
 
 ---

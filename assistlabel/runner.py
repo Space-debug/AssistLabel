@@ -88,11 +88,14 @@ def quiet_progress() -> None:
 
 
 def _load_engine(cfg, registry: ModelRegistry, model_key: str, device: str,
-                 half: bool, source: str) -> BaseEngine:
+                 half: bool, source: str, extra_params: dict | None = None) -> BaseEngine:
     """engine.load with a one-line status instead of raw tqdm bars."""
     quiet_progress()  # before build_engine: engine module import reads env vars
     spec = registry.get(model_key)
-    engine = build_engine(spec.provider, spec.hf_id, _engine_params(spec))
+    params = _engine_params(spec)
+    if extra_params:
+        params.update({k: v for k, v in extra_params.items() if v is not None})
+    engine = build_engine(spec.provider, spec.hf_id, params)
     import time as _time
 
     console.print(f"Loading model [cyan]{model_key}[/] ({spec.hf_id})...")
@@ -119,7 +122,10 @@ def _warmup_task(progress: Progress, label: str):
 
 def build_engine(provider: str, hf_id: str, params: dict) -> BaseEngine:
     if provider in _ENGINE_CACHE:
-        return _ENGINE_CACHE[provider]
+        cached = _ENGINE_CACHE[provider]
+        if params and hasattr(cached, "params"):
+            cached.params.update(params)  # keep per-run tweaks (e.g. prompt_batch)
+        return cached
     if provider == "depth_anything":
         engine = _import("DepthAnythingEngine", "assistlabel.engines.depth_anything")(hf_id, params)
     elif provider == "depth_anything3":
@@ -872,7 +878,8 @@ def run_pipeline(
                                       cfg.depth.half, cfg.download.source)
             elif task == "detect":
                 engine = _load_engine(cfg, registry, cfg.detect.model, cfg.detect.device,
-                                      cfg.detect.half, cfg.download.source)
+                                      cfg.detect.half, cfg.download.source,
+                                      extra_params={"prompt_batch": cfg.detect.prompt_batch})
             else:
                 raise EngineError(f"Unknown task: {task}")
 

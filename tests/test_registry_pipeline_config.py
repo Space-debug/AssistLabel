@@ -87,6 +87,18 @@ def test_load_run_config_resolves_relative_paths(tmp_path):
     assert not hasattr(cfg.detect, "ontology")
 
 
+def test_detect_prompt_batch_is_optional(tmp_path):
+    cfg_file = tmp_path / "run.yaml"
+    base = "dataset:\n  image_dir: raw\n  out_dir: out\ntasks: [detect]\n"
+    cfg_file.write_text(base + "detect:\n  classes: {car: car}\n", encoding="utf-8")
+    assert load_run_config(cfg_file).detect.prompt_batch is None
+
+    cfg_file.write_text(
+        base + "detect:\n  prompt_batch: 8\n  classes: {car: car}\n", encoding="utf-8"
+    )
+    assert load_run_config(cfg_file).detect.prompt_batch == 8
+
+
 def test_config_rejects_unknown_task():
     import yaml as _yaml
     import pydantic
